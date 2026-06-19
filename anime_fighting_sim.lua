@@ -1462,19 +1462,22 @@ mkStroke(champList, C_DIV, 1, 0.3)
 local MAX_CHAMP_BTNS = 12
 local champOptBtns = {}
 local champOptData = {} -- [i] = {id, name}
+local CHAMP_BTN_H = UIS.TouchEnabled and 38 or 22
+local CHAMP_BTN_SPACING = CHAMP_BTN_H + 4
 for i = 1, MAX_CHAMP_BTNS do
     local ob = Instance.new("TextButton", champList)
-    ob.Size = UDim2.new(1, -4, 0, 22)
-    ob.Position = UDim2.new(0, 2, 0, 2 + (i - 1) * 24)
+    ob.Size = UDim2.new(1, -4, 0, CHAMP_BTN_H)
+    ob.Position = UDim2.new(0, 2, 0, 2 + (i - 1) * CHAMP_BTN_SPACING)
     ob.BackgroundColor3 = Color3.fromRGB(28, 10, 50)
     ob.TextColor3 = Color3.fromRGB(220, 200, 255)
     ob.Text = ""
-    ob.TextSize = 10
+    ob.TextSize = UIS.TouchEnabled and 13 or 10
     ob.Font = Enum.Font.GothamBold
     ob.TextXAlignment = Enum.TextXAlignment.Left
     ob.BorderSizePixel = 0
     ob.ZIndex = 16
     ob.Visible = false
+    ob.Active = true
     Instance.new("UICorner", ob).CornerRadius = UDim.new(0, 4)
     ob.MouseEnter:Connect(function() pcall(function() ob.BackgroundColor3 = C_BTN_ON end) end)
     ob.MouseLeave:Connect(function() pcall(function() ob.BackgroundColor3 = Color3.fromRGB(28, 10, 50) end) end)
@@ -1568,7 +1571,7 @@ local function refreshChampList()
             if i <= #champs then
                 champOptData[i] = champs[i]
                 champOptBtns[i].Text = "  [  ] " .. champs[i].name
-                champOptBtns[i].Position = UDim2.new(0, 2, 0, 2 + (i - 1) * 24)
+                champOptBtns[i].Position = UDim2.new(0, 2, 0, 2 + (i - 1) * CHAMP_BTN_SPACING)
                 champOptBtns[i].Visible = true
             else
                 champOptData[i] = nil
@@ -1576,9 +1579,9 @@ local function refreshChampList()
             end
         end
         local count = math.min(#champs, MAX_CHAMP_BTNS)
-        local ch = 2 + count * 24 + 2
+        local ch = 2 + count * CHAMP_BTN_SPACING + 2
         champList.CanvasSize = UDim2.new(0, 0, 0, ch)
-        champList.Size = UDim2.new(1, 0, 0, math.min(ch, 160))
+        champList.Size = UDim2.new(1, 0, 0, math.min(ch, UIS.TouchEnabled and 220 or 160))
         updateCheckmarks()
         updateChampBtnText()
     end)
