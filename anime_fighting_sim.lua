@@ -1478,6 +1478,32 @@ local function saveChampSelection()
     saveState(state)
 end
 
+-- refreshChampList must be defined before click handlers that reference it
+local function refreshChampList()
+    pcall(function()
+        local champs = _G.AutoAdventure.getChampions()
+        if #champs == 0 then return end
+        for i = 1, MAX_CHAMP_BTNS do
+            if i <= #champs then
+                champOptData[i] = champs[i]
+                champOptBtns[i].Text = "  [  ] " .. champs[i].name
+                champOptBtns[i].Position = UDim2.new(0, 2, 0, 2 + (i - 1) * CHAMP_BTN_SPACING)
+                champOptBtns[i].Visible = true
+            else
+                champOptData[i] = nil
+                champOptBtns[i].Visible = false
+            end
+        end
+        local count = math.min(#champs, MAX_CHAMP_BTNS)
+        local ch = 2 + count * CHAMP_BTN_SPACING + 2
+        champList.CanvasSize = UDim2.new(0, 0, 0, ch)
+        local maxVisible = UIS.TouchEnabled and (4 * CHAMP_BTN_SPACING + 4) or 160
+        champList.Size = UDim2.new(1, 0, 0, math.min(ch, maxVisible))
+        updateCheckmarks()
+        updateChampBtnText()
+    end)
+end
+
 -- Wire up click handlers
 for i = 1, MAX_CHAMP_BTNS do
     champOptBtns[i].MouseButton1Click:Connect(function()
@@ -1521,31 +1547,6 @@ champBtn.MouseButton1Click:Connect(function()
         end
     end)
 end)
-
-local function refreshChampList()
-    pcall(function()
-        local champs = _G.AutoAdventure.getChampions()
-        if #champs == 0 then return end
-        for i = 1, MAX_CHAMP_BTNS do
-            if i <= #champs then
-                champOptData[i] = champs[i]
-                champOptBtns[i].Text = "  [  ] " .. champs[i].name
-                champOptBtns[i].Position = UDim2.new(0, 2, 0, 2 + (i - 1) * CHAMP_BTN_SPACING)
-                champOptBtns[i].Visible = true
-            else
-                champOptData[i] = nil
-                champOptBtns[i].Visible = false
-            end
-        end
-        local count = math.min(#champs, MAX_CHAMP_BTNS)
-        local ch = 2 + count * CHAMP_BTN_SPACING + 2
-        champList.CanvasSize = UDim2.new(0, 0, 0, ch)
-        local maxVisible = UIS.TouchEnabled and (4 * CHAMP_BTN_SPACING + 4) or 160
-        champList.Size = UDim2.new(1, 0, 0, math.min(ch, maxVisible))
-        updateCheckmarks()
-        updateChampBtnText()
-    end)
-end
 
 champRefreshBtn.MouseButton1Click:Connect(function()
     champRefreshBtn.Text = "..."
