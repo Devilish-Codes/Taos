@@ -1353,8 +1353,12 @@ makeToggleBtn(controlsFrame, TOGGLE_DEFS[3], 6, W - 16, ty)
 ty = ty + 32
 
 -- Champion multi-select
+local isMobile = UIS.TouchEnabled
+local CHAMP_BTN_MAIN_H = isMobile and 36 or 24
+local CHAMP_CONTAINER_H = isMobile and 42 or 42
+
 local champContainer = Instance.new("Frame", controlsFrame)
-champContainer.Size = UDim2.new(1, -12, 0, 42)
+champContainer.Size = UDim2.new(1, -12, 0, CHAMP_CONTAINER_H)
 champContainer.Position = UDim2.new(0, 6, 0, ty)
 champContainer.BackgroundTransparency = 1
 champContainer.BorderSizePixel = 0
@@ -1365,42 +1369,44 @@ champLbl.Size = UDim2.new(0, 100, 0, 14)
 champLbl.BackgroundTransparency = 1
 champLbl.TextColor3 = Color3.fromRGB(190, 150, 255)
 champLbl.Text = "Champions"
-champLbl.TextSize = 10
+champLbl.TextSize = isMobile and 12 or 10
 champLbl.Font = Enum.Font.GothamBold
 champLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 -- Summary button (shows selection, toggles list)
 local champBtn = Instance.new("TextButton", champContainer)
-champBtn.Size = UDim2.new(1, -56, 0, 24)
+champBtn.Size = UDim2.new(1, -56, 0, CHAMP_BTN_MAIN_H)
 champBtn.Position = UDim2.new(0, 0, 0, 16)
 champBtn.BackgroundColor3 = Color3.fromRGB(28, 10, 50)
 champBtn.TextColor3 = Color3.fromRGB(200, 180, 230)
 champBtn.Text = "All Champions"
-champBtn.TextSize = 11
+champBtn.TextSize = isMobile and 13 or 11
 champBtn.Font = Enum.Font.GothamBold
 champBtn.BorderSizePixel = 0
 champBtn.ZIndex = 5
+champBtn.Active = true
 Instance.new("UICorner", champBtn).CornerRadius = UDim.new(0, 5)
 mkStroke(champBtn, C_DIV, 1, 0.3)
 
 -- Refresh button
 local champRefreshBtn = Instance.new("TextButton", champContainer)
-champRefreshBtn.Size = UDim2.new(0, 50, 0, 24)
-champRefreshBtn.Position = UDim2.new(1, -50, 0, 16)
+champRefreshBtn.Size = UDim2.new(0, 56, 0, CHAMP_BTN_MAIN_H)
+champRefreshBtn.Position = UDim2.new(1, -56, 0, 16)
 champRefreshBtn.BackgroundColor3 = Color3.fromRGB(28, 10, 50)
 champRefreshBtn.TextColor3 = Color3.fromRGB(190, 150, 255)
 champRefreshBtn.Text = "Refresh"
-champRefreshBtn.TextSize = 9
+champRefreshBtn.TextSize = isMobile and 11 or 9
 champRefreshBtn.Font = Enum.Font.GothamBold
 champRefreshBtn.BorderSizePixel = 0
 champRefreshBtn.ZIndex = 5
+champRefreshBtn.Active = true
 Instance.new("UICorner", champRefreshBtn).CornerRadius = UDim.new(0, 4)
 mkStroke(champRefreshBtn, C_DIV, 1, 0.4)
 
 -- Checklist panel
 local champList = Instance.new("ScrollingFrame", champContainer)
 champList.Size = UDim2.new(1, 0, 0, 0)
-champList.Position = UDim2.new(0, 0, 0, 42)
+champList.Position = UDim2.new(0, 0, 0, 16 + CHAMP_BTN_MAIN_H + 4)
 champList.BackgroundColor3 = Color3.fromRGB(18, 6, 34)
 champList.BorderSizePixel = 0
 champList.Visible = false
