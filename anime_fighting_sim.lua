@@ -1353,12 +1353,8 @@ makeToggleBtn(controlsFrame, TOGGLE_DEFS[3], 6, W - 16, ty)
 ty = ty + 32
 
 -- Champion multi-select
-local isMobile = UIS.TouchEnabled
-local CHAMP_BTN_MAIN_H = isMobile and 36 or 24
-local CHAMP_CONTAINER_H = isMobile and 42 or 42
-
 local champContainer = Instance.new("Frame", controlsFrame)
-champContainer.Size = UDim2.new(1, -12, 0, CHAMP_CONTAINER_H)
+champContainer.Size = UDim2.new(1, -12, 0, 42)
 champContainer.Position = UDim2.new(0, 6, 0, ty)
 champContainer.BackgroundTransparency = 1
 champContainer.BorderSizePixel = 0
@@ -1369,18 +1365,18 @@ champLbl.Size = UDim2.new(0, 100, 0, 14)
 champLbl.BackgroundTransparency = 1
 champLbl.TextColor3 = Color3.fromRGB(190, 150, 255)
 champLbl.Text = "Champions"
-champLbl.TextSize = isMobile and 12 or 10
+champLbl.TextSize = 10
 champLbl.Font = Enum.Font.GothamBold
 champLbl.TextXAlignment = Enum.TextXAlignment.Left
 
 -- Summary button (shows selection, toggles list)
 local champBtn = Instance.new("TextButton", champContainer)
-champBtn.Size = UDim2.new(1, -56, 0, CHAMP_BTN_MAIN_H)
+champBtn.Size = UDim2.new(1, -56, 0, 24)
 champBtn.Position = UDim2.new(0, 0, 0, 16)
 champBtn.BackgroundColor3 = Color3.fromRGB(28, 10, 50)
 champBtn.TextColor3 = Color3.fromRGB(200, 180, 230)
 champBtn.Text = "All Champions"
-champBtn.TextSize = isMobile and 13 or 11
+champBtn.TextSize = 11
 champBtn.Font = Enum.Font.GothamBold
 champBtn.BorderSizePixel = 0
 champBtn.ZIndex = 5
@@ -1390,23 +1386,22 @@ mkStroke(champBtn, C_DIV, 1, 0.3)
 
 -- Refresh button
 local champRefreshBtn = Instance.new("TextButton", champContainer)
-champRefreshBtn.Size = UDim2.new(0, 56, 0, CHAMP_BTN_MAIN_H)
-champRefreshBtn.Position = UDim2.new(1, -56, 0, 16)
+champRefreshBtn.Size = UDim2.new(0, 50, 0, 24)
+champRefreshBtn.Position = UDim2.new(1, -50, 0, 16)
 champRefreshBtn.BackgroundColor3 = Color3.fromRGB(28, 10, 50)
 champRefreshBtn.TextColor3 = Color3.fromRGB(190, 150, 255)
 champRefreshBtn.Text = "Refresh"
-champRefreshBtn.TextSize = isMobile and 11 or 9
+champRefreshBtn.TextSize = 9
 champRefreshBtn.Font = Enum.Font.GothamBold
 champRefreshBtn.BorderSizePixel = 0
 champRefreshBtn.ZIndex = 5
-champRefreshBtn.Active = true
 Instance.new("UICorner", champRefreshBtn).CornerRadius = UDim.new(0, 4)
 mkStroke(champRefreshBtn, C_DIV, 1, 0.4)
 
 -- Checklist panel
 local champList = Instance.new("ScrollingFrame", champContainer)
 champList.Size = UDim2.new(1, 0, 0, 0)
-champList.Position = UDim2.new(0, 0, 0, 16 + CHAMP_BTN_MAIN_H + 4)
+champList.Position = UDim2.new(0, 0, 0, 42)
 champList.BackgroundColor3 = Color3.fromRGB(18, 6, 34)
 champList.BorderSizePixel = 0
 champList.Visible = false
@@ -1419,22 +1414,19 @@ mkStroke(champList, C_DIV, 1, 0.3)
 local MAX_CHAMP_BTNS = 12
 local champOptBtns = {}
 local champOptData = {} -- [i] = {id, name}
-local CHAMP_BTN_H = UIS.TouchEnabled and 38 or 22
-local CHAMP_BTN_SPACING = CHAMP_BTN_H + 4
 for i = 1, MAX_CHAMP_BTNS do
     local ob = Instance.new("TextButton", champList)
-    ob.Size = UDim2.new(1, -4, 0, CHAMP_BTN_H)
-    ob.Position = UDim2.new(0, 2, 0, 2 + (i - 1) * CHAMP_BTN_SPACING)
+    ob.Size = UDim2.new(1, -4, 0, 22)
+    ob.Position = UDim2.new(0, 2, 0, 2 + (i - 1) * 24)
     ob.BackgroundColor3 = Color3.fromRGB(28, 10, 50)
     ob.TextColor3 = Color3.fromRGB(220, 200, 255)
     ob.Text = ""
-    ob.TextSize = UIS.TouchEnabled and 13 or 10
+    ob.TextSize = 10
     ob.Font = Enum.Font.GothamBold
     ob.TextXAlignment = Enum.TextXAlignment.Left
     ob.BorderSizePixel = 0
     ob.ZIndex = 16
     ob.Visible = false
-    ob.Active = true
     Instance.new("UICorner", ob).CornerRadius = UDim.new(0, 4)
     ob.MouseEnter:Connect(function() pcall(function() ob.BackgroundColor3 = C_BTN_ON end) end)
     ob.MouseLeave:Connect(function() pcall(function() ob.BackgroundColor3 = Color3.fromRGB(28, 10, 50) end) end)
@@ -1493,7 +1485,7 @@ local function refreshChampList()
             if i <= #champs then
                 champOptData[i] = champs[i]
                 champOptBtns[i].Text = "  [  ] " .. champs[i].name
-                champOptBtns[i].Position = UDim2.new(0, 2, 0, 2 + (i - 1) * CHAMP_BTN_SPACING)
+                champOptBtns[i].Position = UDim2.new(0, 2, 0, 2 + (i - 1) * 24)
                 champOptBtns[i].Visible = true
             else
                 champOptData[i] = nil
@@ -1501,9 +1493,9 @@ local function refreshChampList()
             end
         end
         local count = math.min(#champs, MAX_CHAMP_BTNS)
-        local ch = 2 + count * CHAMP_BTN_SPACING + 2
+        local ch = 2 + count * 24 + 2
         champList.CanvasSize = UDim2.new(0, 0, 0, ch)
-        local maxVisible = UIS.TouchEnabled and (4 * CHAMP_BTN_SPACING + 4) or 160
+        local maxVisible = UIS.TouchEnabled and (4 * 24 + 4) or 160
         champList.Size = UDim2.new(1, 0, 0, math.min(ch, maxVisible))
         updateCheckmarks()
         updateChampBtnText()
@@ -1531,27 +1523,17 @@ local function closeChampList()
     if activeDropdown == champList then activeDropdown = nil end
 end
 champBtn.MouseButton1Click:Connect(function()
-    pcall(function()
-        if champListOpen then
-            closeChampList()
-        else
-            if activeDropdown and activeDropdown ~= champList then
-                activeDropdown.Visible = false
-            end
-            refreshChampList()
-            champList.Visible = true
-            champListOpen = true
-            activeDropdown = champList
-            updateCheckmarks()
-            -- Ensure min/max height so it's usable on mobile
-            local minH = CHAMP_BTN_SPACING + 4
-            local maxH = UIS.TouchEnabled and (4 * CHAMP_BTN_SPACING + 4) or 160
-            local curH = champList.Size.Y.Offset
-            if curH < minH or curH > maxH then
-                champList.Size = UDim2.new(1, 0, 0, math.clamp(curH, minH, maxH))
-            end
-        end
-    end)
+    if champListOpen then
+        closeChampList()
+        return
+    end
+    if activeDropdown and activeDropdown ~= champList then
+        activeDropdown.Visible = false
+    end
+    champList.Visible = true
+    champListOpen = true
+    activeDropdown = champList
+    updateCheckmarks()
 end)
 
 champRefreshBtn.MouseButton1Click:Connect(function()
