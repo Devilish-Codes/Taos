@@ -1560,9 +1560,12 @@ champBtn.MouseButton1Click:Connect(function()
             champListOpen = true
             activeDropdown = champList
             updateCheckmarks()
-            -- Ensure minimum height so it's never a thin line
-            if champList.Size.Y.Offset < CHAMP_BTN_SPACING + 4 then
-                champList.Size = UDim2.new(1, 0, 0, CHAMP_BTN_SPACING + 4)
+            -- Ensure min/max height so it's usable on mobile
+            local minH = CHAMP_BTN_SPACING + 4
+            local maxH = UIS.TouchEnabled and (4 * CHAMP_BTN_SPACING + 4) or 160
+            local curH = champList.Size.Y.Offset
+            if curH < minH or curH > maxH then
+                champList.Size = UDim2.new(1, 0, 0, math.clamp(curH, minH, maxH))
             end
         end
     end)
@@ -1586,7 +1589,8 @@ local function refreshChampList()
         local count = math.min(#champs, MAX_CHAMP_BTNS)
         local ch = 2 + count * CHAMP_BTN_SPACING + 2
         champList.CanvasSize = UDim2.new(0, 0, 0, ch)
-        champList.Size = UDim2.new(1, 0, 0, math.min(ch, UIS.TouchEnabled and 220 or 160))
+        local maxVisible = UIS.TouchEnabled and (4 * CHAMP_BTN_SPACING + 4) or 160
+        champList.Size = UDim2.new(1, 0, 0, math.min(ch, maxVisible))
         updateCheckmarks()
         updateChampBtnText()
     end)
