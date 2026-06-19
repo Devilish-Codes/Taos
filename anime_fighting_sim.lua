@@ -1555,10 +1555,15 @@ champBtn.MouseButton1Click:Connect(function()
             if activeDropdown and activeDropdown ~= champList then
                 activeDropdown.Visible = false
             end
+            refreshChampList()
             champList.Visible = true
             champListOpen = true
             activeDropdown = champList
             updateCheckmarks()
+            -- Ensure minimum height so it's never a thin line
+            if champList.Size.Y.Offset < CHAMP_BTN_SPACING + 4 then
+                champList.Size = UDim2.new(1, 0, 0, CHAMP_BTN_SPACING + 4)
+            end
         end
     end)
 end)
