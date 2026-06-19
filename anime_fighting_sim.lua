@@ -171,6 +171,7 @@ do
     local statusText = "Idle"
     local chakraActive = false -- true = key 3 was pressed, Chakra training on
     local wasFighting = false  -- track boss state transitions
+    local CYCLE_STATS = {"Strength", "Durability", "Chakra", "Sword"} -- no Speed/Agility teleport
 
     local function simulateClick()
         pcall(function()
@@ -373,7 +374,7 @@ do
 
             pcall(function()
                 if selectedStat == "All" then
-                    local zoneStat = STAT_TYPES[statIdx]
+                    local zoneStat = CYCLE_STATS[statIdx]
                     currentStat = zoneStat
                     teleportToZone(zoneStat)
                     trainAllStats()
@@ -384,7 +385,7 @@ do
                         trainAllStats()
                         task.wait(jitter(0.5, 0.2))
                     end
-                    statIdx = (statIdx % #STAT_TYPES) + 1
+                    statIdx = (statIdx % #CYCLE_STATS) + 1
                 else
                     currentStat = selectedStat
                     teleportToZone(selectedStat)
@@ -1342,60 +1343,10 @@ local function makeDropdown(parent, labelText, yPos, options, onSelect)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════════
--- TAB 1: CONTROLS (Train + Adventure + Anti-AFK)
+-- TAB 1: CONTROLS (Adventure + Train + Anti-AFK)
 -- ═══════════════════════════════════════════════════════════════════════════════
 local controlsFrame = contentFrames[1]
 local ty = 6
-
--- Auto Train Toggle
-makeToggleBtn(controlsFrame, TOGGLE_DEFS[1], 6, W - 16, ty)
-ty = ty + 32
-
--- Stat Dropdown
-local statOpts = {{ value = "All", display = "All (Cycle)" }}
-for _, s in ipairs(STAT_TYPES) do
-    table.insert(statOpts, { value = s, display = s })
-end
-local statDropdown = makeDropdown(controlsFrame, "Training Stat", ty, statOpts, function(val)
-    pcall(function() _G.AutoTrain.setStat(val) end)
-end)
-statDropdown.btn.Text = savedState.trainStat or "All (Cycle)"
-if savedState.trainStat then
-    pcall(function() _G.AutoTrain.setStat(savedState.trainStat == "All (Cycle)" and "All" or savedState.trainStat) end)
-end
-ty = ty + 40
-
--- Train status
-local trainStatusLbl = Instance.new("TextLabel", controlsFrame)
-trainStatusLbl.Size = UDim2.new(1, -12, 0, 14)
-trainStatusLbl.Position = UDim2.new(0, 6, 0, ty)
-trainStatusLbl.BackgroundTransparency = 1
-trainStatusLbl.TextColor3 = Color3.fromRGB(200, 180, 230)
-trainStatusLbl.Text = "Status: Idle"
-trainStatusLbl.TextSize = 10
-trainStatusLbl.Font = Enum.Font.Gotham
-trainStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-ty = ty + 16
-
--- Stat readouts (compact 3-col)
-local statLabels = {}
-for i, name in ipairs(STAT_TYPES) do
-    local row = math.ceil(i / 3)
-    local col = (i - 1) % 3
-    local lbl = Instance.new("TextLabel", controlsFrame)
-    lbl.Size = UDim2.new(0, 95, 0, 13)
-    lbl.Position = UDim2.new(0, 6 + col * 100, 0, ty + (row - 1) * 14)
-    lbl.BackgroundTransparency = 1
-    lbl.TextColor3 = Color3.fromRGB(180, 150, 220)
-    lbl.Text = name .. ": ?"
-    lbl.TextSize = 9
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    statLabels[name] = lbl
-end
-ty = ty + math.ceil(#STAT_TYPES / 3) * 14 + 4
-
-hLine(controlsFrame, ty); ty = ty + 6
 
 -- Auto Adventure Toggle
 makeToggleBtn(controlsFrame, TOGGLE_DEFS[3], 6, W - 16, ty)
@@ -1635,6 +1586,56 @@ advStatusLbl.TextSize = 10
 advStatusLbl.Font = Enum.Font.Gotham
 advStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 ty = ty + 18
+
+hLine(controlsFrame, ty); ty = ty + 6
+
+-- Auto Train Toggle
+makeToggleBtn(controlsFrame, TOGGLE_DEFS[1], 6, W - 16, ty)
+ty = ty + 32
+
+-- Stat Dropdown
+local statOpts = {{ value = "All", display = "All (Cycle)" }}
+for _, s in ipairs(STAT_TYPES) do
+    table.insert(statOpts, { value = s, display = s })
+end
+local statDropdown = makeDropdown(controlsFrame, "Training Stat", ty, statOpts, function(val)
+    pcall(function() _G.AutoTrain.setStat(val) end)
+end)
+statDropdown.btn.Text = savedState.trainStat or "All (Cycle)"
+if savedState.trainStat then
+    pcall(function() _G.AutoTrain.setStat(savedState.trainStat == "All (Cycle)" and "All" or savedState.trainStat) end)
+end
+ty = ty + 40
+
+-- Train status
+local trainStatusLbl = Instance.new("TextLabel", controlsFrame)
+trainStatusLbl.Size = UDim2.new(1, -12, 0, 14)
+trainStatusLbl.Position = UDim2.new(0, 6, 0, ty)
+trainStatusLbl.BackgroundTransparency = 1
+trainStatusLbl.TextColor3 = Color3.fromRGB(200, 180, 230)
+trainStatusLbl.Text = "Status: Idle"
+trainStatusLbl.TextSize = 10
+trainStatusLbl.Font = Enum.Font.Gotham
+trainStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+ty = ty + 16
+
+-- Stat readouts (compact 3-col)
+local statLabels = {}
+for i, name in ipairs(STAT_TYPES) do
+    local row = math.ceil(i / 3)
+    local col = (i - 1) % 3
+    local lbl = Instance.new("TextLabel", controlsFrame)
+    lbl.Size = UDim2.new(0, 95, 0, 13)
+    lbl.Position = UDim2.new(0, 6 + col * 100, 0, ty + (row - 1) * 14)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Color3.fromRGB(180, 150, 220)
+    lbl.Text = name .. ": ?"
+    lbl.TextSize = 9
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    statLabels[name] = lbl
+end
+ty = ty + math.ceil(#STAT_TYPES / 3) * 14 + 4
 
 hLine(controlsFrame, ty); ty = ty + 6
 
