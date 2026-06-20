@@ -1,48 +1,48 @@
 do
-local _Ill1ll={}
-local _1LiIl1ILi=(getgenv or function() return _G end)()
-local _ill1Ii=true
-_Ill1ll.loadstring=_1LiIl1ILi.loadstring
-_Ill1ll.load=_1LiIl1ILi.load
-_Ill1ll.type=_1LiIl1ILi.type
-_Ill1ll.pcall=_1LiIl1ILi.pcall
-_Ill1ll.rawequal=rawequal
-_Ill1ll.tostring=tostring
-_Ill1ll.coroutine_resume=coroutine.resume
-_Ill1ll.coroutine_create=coroutine.create
-_Ill1ll.math_floor=math.floor
-_Ill1ll.string_byte=string.byte
-_Ill1ll.table_concat=table.concat
-pcall(function() _1LiIl1ILi.hookfunction=nil end)
-pcall(function() _1LiIl1ILi.hookmetamethod=nil end)
-pcall(function() _1LiIl1ILi.newcclosure=nil end)
-pcall(function() _1LiIl1ILi.replaceclosure=nil end)
-pcall(function() _1LiIl1ILi.clonefunction=nil end)
-pcall(function() _1LiIl1ILi.getgc=nil end)
-pcall(function() _1LiIl1ILi.getinfo=nil end)
-pcall(function() _1LiIl1ILi.getupvalue=nil end)
-pcall(function() _1LiIl1ILi.getupvalues=nil end)
-pcall(function() _1LiIl1ILi.setupvalue=nil end)
-pcall(function() _1LiIl1ILi.getrawmetatable=nil end)
-pcall(function() _1LiIl1ILi.setreadonly=nil end)
-pcall(function() _1LiIl1ILi.isreadonly=nil end)
-pcall(function() _1LiIl1ILi.getnamecallmethod=nil end)
-pcall(function() _1LiIl1ILi.setnamecallmethod=nil end)
-pcall(function() _1LiIl1ILi.decompile=nil end)
-pcall(function() _1LiIl1ILi.disassemble=nil end)
-pcall(function() _1LiIl1ILi.saveinstance=nil end)
-pcall(function() _1LiIl1ILi.getscriptbytecode=nil end)
-pcall(function() _1LiIl1ILi.dumpstring=nil end)
-pcall(function() _1LiIl1ILi.writefile=nil end)
-pcall(function() _1LiIl1ILi.appendfile=nil end)
-pcall(function() _1LiIl1ILi.getconnections=nil end)
+local _iLLIlLi={}
+local _I1iIlI=(getgenv or function() return _G end)()
+local _IiI111IL1=true
+_iLLIlLi.loadstring=_I1iIlI.loadstring
+_iLLIlLi.load=_I1iIlI.load
+_iLLIlLi.type=_I1iIlI.type
+_iLLIlLi.pcall=_I1iIlI.pcall
+_iLLIlLi.rawequal=rawequal
+_iLLIlLi.tostring=tostring
+_iLLIlLi.coroutine_resume=coroutine.resume
+_iLLIlLi.coroutine_create=coroutine.create
+_iLLIlLi.math_floor=math.floor
+_iLLIlLi.string_byte=string.byte
+_iLLIlLi.table_concat=table.concat
+pcall(function() _I1iIlI.hookfunction=nil end)
+pcall(function() _I1iIlI.hookmetamethod=nil end)
+pcall(function() _I1iIlI.newcclosure=nil end)
+pcall(function() _I1iIlI.replaceclosure=nil end)
+pcall(function() _I1iIlI.clonefunction=nil end)
+pcall(function() _I1iIlI.getgc=nil end)
+pcall(function() _I1iIlI.getinfo=nil end)
+pcall(function() _I1iIlI.getupvalue=nil end)
+pcall(function() _I1iIlI.getupvalues=nil end)
+pcall(function() _I1iIlI.setupvalue=nil end)
+pcall(function() _I1iIlI.getrawmetatable=nil end)
+pcall(function() _I1iIlI.setreadonly=nil end)
+pcall(function() _I1iIlI.isreadonly=nil end)
+pcall(function() _I1iIlI.getnamecallmethod=nil end)
+pcall(function() _I1iIlI.setnamecallmethod=nil end)
+pcall(function() _I1iIlI.decompile=nil end)
+pcall(function() _I1iIlI.disassemble=nil end)
+pcall(function() _I1iIlI.saveinstance=nil end)
+pcall(function() _I1iIlI.getscriptbytecode=nil end)
+pcall(function() _I1iIlI.dumpstring=nil end)
+pcall(function() _I1iIlI.writefile=nil end)
+pcall(function() _I1iIlI.appendfile=nil end)
+pcall(function() _I1iIlI.getconnections=nil end)
 do
-  local _IiiI1Lii=load or loadstring
-  if _IiiI1Lii then
-    local _1l1Il,_Il1II=pcall(_IiiI1Lii,"return 1")
-    if _1l1Il and type(_Il1II)=="function" then
-      local _1iILli1l,_1llILlil1=pcall(_Il1II)
-      if not _1iILli1l or _1llILlil1~=1 then _ill1Ii=false end
+  local _l1I1liL=load or loadstring
+  if _l1I1liL then
+    local _l1lILlI,_LI1iLL=pcall(_l1I1liL,"return 1")
+    if _l1lILlI and type(_LI1iLL)=="function" then
+      local _11LILIi,_liILliL=pcall(_LI1iLL)
+      if not _11LILIi or _liILliL~=1 then _IiI111IL1=false end
     end
   end
 end
@@ -50,20 +50,20 @@ pcall(function()
   local _ls=load or loadstring
   if _ls and debug and debug.info then
     local _s=debug.info(_ls,"s")
-    if _s and _s~="[C]" and _s~="" then _ill1Ii=false end
+    if _s and _s~="[C]" and _s~="" then _IiI111IL1=false end
   end
 end)
 do
-  local _Iiil1ll1l,_1LilliI1i=pcall(function() return game:GetService("Players") end)
-  local _LLLlL,_Ii1iI1lLI=pcall(function() return game.GetService(game,"Players") end)
-  if _Iiil1ll1l and _LLLlL and _1LilliI1i~=_Ii1iI1lLI then _ill1Ii=false end
+  local _iLILIl,_iiliLii=pcall(function() return game:GetService("Players") end)
+  local _lILil1,_lIliIiILI=pcall(function() return game.GetService(game,"Players") end)
+  if _iLILIl and _lILil1 and _iiliLii~=_lIliIiILI then _IiI111IL1=false end
 end
 do
-  local _1lIIlllli=_1LiIl1ILi.loadstring or _1LiIl1ILi.load
-  if _1lIIlllli and not rawequal(load or loadstring,_1lIIlllli) then _ill1Ii=false end
+  local _lLII1l=_I1iIlI.loadstring or _I1iIlI.load
+  if _lLII1l and not rawequal(load or loadstring,_lLII1l) then _IiI111IL1=false end
 end
 pcall(function()
-  local _mt=getrawmetatable and getrawmetatable(_1LiIl1ILi)
+  local _mt=getrawmetatable and getrawmetatable(_I1iIlI)
   if _mt then
     local _oi=rawget(_mt,"__newindex")
     rawset(_mt,"__newindex",function(_t,_k,_v)
@@ -74,47 +74,46 @@ pcall(function()
   end
 end)
 do
-  local _LlLIII1ii=os.clock()
+  local _II1I1=os.clock()
   pcall(function() game:GetService("Players") end)
-  local _LiLiLll1L=os.clock()-_LlLIII1ii
-  if _LiLiLll1L>0.05 then _ill1Ii=false end
+  local _1I11L1=os.clock()-_II1I1
+  if _1I11L1>0.05 then _IiI111IL1=false end
 end
 pcall(function()
   local _gs=tostring(game)
-  if _gs~="Game" and not string.match(_gs,"^%a") then _ill1Ii=false end
+  if _gs~="Game" and not string.match(_gs,"^%a") then _IiI111IL1=false end
 end)
 do
-  local _iIIIII=coroutine.create(function() coroutine.yield(42) end)
-  local _LLLii,_IIlLl=coroutine.resume(_iIIIII)
-  if not _LLLii or _IIlLl~=42 then _ill1Ii=false end
+  local _I1ILl=coroutine.create(function() coroutine.yield(42) end)
+  local _ILlLll1i,_LLLLIl1=coroutine.resume(_I1ILl)
+  if not _ILlLll1i or _LLLLIl1~=42 then _IiI111IL1=false end
 end
 pcall(function()
   local _pid=game.PlaceId
-  if type(_pid)~="number" or _pid==0 then _ill1Ii=false end
+  if type(_pid)~="number" or _pid==0 then _IiI111IL1=false end
 end)
 task.spawn(function()
-  while _ill1Ii do
-    if not rawequal(type,_Ill1ll.type) then _ill1Ii=false end
-    if not rawequal(pcall,_Ill1ll.pcall) then _ill1Ii=false end
-    local _ls=_1LiIl1ILi.loadstring or _1LiIl1ILi.load
-    if _ls and _Ill1ll.loadstring and not rawequal(_ls,_Ill1ll.loadstring) then _ill1Ii=false end
+  while _IiI111IL1 do
+    if not rawequal(type,_iLLIlLi.type) then _IiI111IL1=false end
+    if not rawequal(pcall,_iLLIlLi.pcall) then _IiI111IL1=false end
+    local _ls=_I1iIlI.loadstring or _I1iIlI.load
+    if _ls and _iLLIlLi.loadstring and not rawequal(_ls,_iLLIlLi.loadstring) then _IiI111IL1=false end
     pcall(function()
       if debug and debug.info then
-        local _src=debug.info(_Ill1ll.loadstring or _Ill1ll.load,"s")
-        if _src and _src~="[C]" and _src~="" then _ill1Ii=false end
+        local _src=debug.info(_iLLIlLi.loadstring or _iLLIlLi.load,"s")
+        if _src and _src~="[C]" and _src~="" then _IiI111IL1=false end
       end
     end)
     do
       local _ok1,_v1=pcall(function() return game:GetService("Players") end)
       local _ok2,_v2=pcall(function() return game.GetService(game,"Players") end)
-      if _ok1 and _ok2 and _v1~=_v2 then _ill1Ii=false end
+      if _ok1 and _ok2 and _v1~=_v2 then _IiI111IL1=false end
     end
-    if not _ill1Ii then return end
-    task.wait(3+math.random()*3)
+    if not _IiI111IL1 then return end
+    task.wait(2+math.random()*4)
   end
 end)
-if _ill1Ii then
-local _II1II,_LLLi1iL=(load or loadstring)([[
+if _IiI111IL1 then
 -- ─── Devilish Key Gate ───────────────────────────────────────────────────────
  if not _G._devilishKey then
      warn("[SlimeRNG] No key data found. Run via hub.lua.")
@@ -2190,14 +2189,5 @@ end)
 _G.SlimeRNGMain = {
     close = function() g:Destroy() _G.SlimeRNGMain = nil end,
 }
-]])
-if _II1II then
-  local _lIILllL,_liIL1li=pcall(_II1II)
-  if not _lIILllL then warn("[ANTI-HOOK] Script error: "..tostring(_liIL1li)) end
-else
-  warn("[ANTI-HOOK] Load error: "..tostring(_LLLi1iL))
-end
-else
-  warn("[ANTI-HOOK] Integrity check failed — script execution blocked.")
 end
 end
