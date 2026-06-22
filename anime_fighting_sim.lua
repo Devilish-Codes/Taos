@@ -181,16 +181,38 @@ end
 
 -- ─── Entity Tracking (shared across combat features) ────────────────────────
 local trackedEntities = {}
-local _knownBossNames = {} -- dynamic set: lowercase name -> true
+local _knownBossNames = {} -- dynamic set: lowercase stripped name -> true
+local _bossSpawnPositions = {} -- stripped name -> Vector3 (for direct teleport)
 
 local function refreshBossNames()
     pcall(function()
+        local function scanBossFolder(folder)
+            if not folder then return end
+            -- Only direct children are boss names (descendants are VFX parts)
+            for _, child in ipairs(folder:GetChildren()) do
+                local key = child.Name:lower():gsub("[_%s]", "")
+                if key == "" then continue end
+                _knownBossNames[key] = true
+                -- Extract position from the child
+                local pos = nil
+                if child:IsA("BasePart") then
+                    pos = child.Position
+                else
+                    local p = child:FindFirstChildWhichIsA("BasePart", true)
+                    if p then pos = p.Position end
+                end
+                if pos then _bossSpawnPositions[key] = pos end
+            end
+        end
         local spawns = workspace:FindFirstChild("Spawns")
-        local bossFolder = spawns and spawns:FindFirstChild("Bosses")
-        if not bossFolder then return end
-        for _, child in ipairs(bossFolder:GetChildren()) do
-            if child:IsA("BasePart") then
-                _knownBossNames[child.Name:lower()] = true
+        if spawns then
+            scanBossFolder(spawns:FindFirstChild("Bosses"))
+            scanBossFolder(spawns:FindFirstChild("Boss"))
+            scanBossFolder(spawns:FindFirstChild("WorldBosses"))
+            for _, child in ipairs(spawns:GetChildren()) do
+                if child.Name:lower():find("boss") then
+                    scanBossFolder(child)
+                end
             end
         end
     end)
@@ -198,13 +220,12 @@ end
 
 local function isBossName(name)
     if not name or name == "" then return false end
-    local lower = name:lower()
-    if _knownBossNames[lower] then return true end
-    local stripped = lower:gsub("[_%s]", "")
-    for boss in pairs(_knownBossNames) do
-        if stripped == boss:gsub("%s", "") then return true end
-    end
-    return false
+    return _knownBossNames[name:lower():gsub("[_%s]", "")] == true
+end
+
+local function getBossSpawnPos(name)
+    if not name or name == "" then return nil end
+    return _bossSpawnPositions[name:lower():gsub("[_%s]", "")]
 end
 
 task.spawn(function()
@@ -363,8 +384,8 @@ task.spawn(function()
 end)
 
 local _lastNameScan = 0
-local function nameUnnamedEntities()
-    if tick() - _lastNameScan < 3 then return end
+local function nameUnnamedEntities(force)
+    if not force and tick() - _lastNameScan < 3 then return end
     _lastNameScan = tick()
     pcall(function()
         local ce = workspace:FindFirstChild("ClientEntities")
@@ -389,11 +410,11 @@ end
 
 -- ─── Shared Skill System ────────────────────────────────────────────────────
 local _skillKeys = {
-    Enum.KeyCode.Q, Enum.KeyCode.R, Enum.KeyCode.T, Enum.KeyCode.Y,
-    Enum.KeyCode.U, Enum.KeyCode.P, Enum.KeyCode.F, Enum.KeyCode.G,
-    Enum.KeyCode.H, Enum.KeyCode.J, Enum.KeyCode.K, Enum.KeyCode.L,
-    Enum.KeyCode.Z, Enum.KeyCode.V, Enum.KeyCode.B, Enum.KeyCode.N,
-    Enum.KeyCode.M,
+    Enum.KeyCode.Q, Enum.KeyCode.E, Enum.KeyCode.R, Enum.KeyCode.T,
+    Enum.KeyCode.Y, Enum.KeyCode.U, Enum.KeyCode.P, Enum.KeyCode.F,
+    Enum.KeyCode.G, Enum.KeyCode.H, Enum.KeyCode.J, Enum.KeyCode.K,
+    Enum.KeyCode.L, Enum.KeyCode.Z, Enum.KeyCode.X, Enum.KeyCode.C,
+    Enum.KeyCode.V, Enum.KeyCode.B, Enum.KeyCode.N, Enum.KeyCode.M,
 }
 
 local _skillSpamRunning = false
@@ -429,6 +450,55 @@ local function _simulateClick()
             workspace.CurrentCamera.ViewportSize.Y / 2
         ))
     end)
+end
+
+-- ─── Special Equip + Auto Click ─────────────────────────────────────────────
+local _specialKeyMap = {
+    ["5"] = Enum.KeyCode.Five, ["6"] = Enum.KeyCode.Six,
+    ["7"] = Enum.KeyCode.Seven, ["8"] = Enum.KeyCode.Eight,
+    ["9"] = Enum.KeyCode.Nine, ["0"] = Enum.KeyCode.Zero,
+}
+local _specialKeyCode = _specialKeyMap[savedState.specialKey] or Enum.KeyCode.Five
+local _specialEquipped = false
+
+local function equipSpecial()
+    if _specialEquipped then return end
+    _specialEquipped = true
+    pressKey(_specialKeyCode)
+end
+
+PL.CharacterAdded:Connect(function()
+    _specialEquipped = false
+end)
+
+local _autoClickRunning = false
+local _autoClickThread = nil
+
+local function startAutoClick()
+    if _autoClickRunning then return end
+    _autoClickRunning = true
+    _autoClickThread = task.spawn(function()
+        local Camera = workspace.CurrentCamera
+        local VIM_AC = game:GetService("VirtualInputManager")
+        while _autoClickRunning do
+            pcall(function()
+                local part = _combatTargetPart
+                if not part or not part.Parent then return end
+                local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+                if onScreen then
+                    VIM_AC:SendMouseButtonEvent(screenPos.X, screenPos.Y, 0, true, game, 1)
+                    task.wait(0.05)
+                    VIM_AC:SendMouseButtonEvent(screenPos.X, screenPos.Y, 0, false, game, 1)
+                end
+            end)
+            task.wait(0.1)
+        end
+    end)
+end
+
+local function stopAutoClick()
+    _autoClickRunning = false
+    if _autoClickThread then pcall(task.cancel, _autoClickThread); _autoClickThread = nil end
 end
 
 -- ─── Feature: Auto Train ─────────────────────────────────────────────────────
@@ -707,31 +777,31 @@ do
     local lastBossId = nil
 
     -- Boss spawn positions (permanent markers)
-    local _bossSpawns = {}
-    local function loadBossSpawns()
-        if #_bossSpawns > 0 then return end
-        pcall(function()
-            local spawns = workspace:FindFirstChild("Spawns")
-            local bossFolder = spawns and spawns:FindFirstChild("Bosses")
-            if not bossFolder then return end
-            for _, child in ipairs(bossFolder:GetChildren()) do
-                if child:IsA("BasePart") then
-                    table.insert(_bossSpawns, { name = child.Name, pos = child.Position })
-                end
-            end
-        end)
+    local function getBossSpawns()
+        local spawns = {}
+        for key, pos in pairs(_bossSpawnPositions) do
+            table.insert(spawns, { name = key, pos = pos })
+        end
+        return spawns
     end
 
     local STALE_TIMEOUT = 15
 
     local function findBoss()
         nameUnnamedEntities()
-        loadBossSpawns()
+        refreshBossNames() -- ensure latest boss names
 
         local now = tick()
         for id, ent in pairs(trackedEntities) do
-            if isBossName(ent.name) and ent.lastSeen and (now - ent.lastSeen) > STALE_TIMEOUT then
-                trackedEntities[id] = nil
+            if isBossName(ent.name) then
+                -- Remove stale tracked entries
+                if ent.lastSeen and (now - ent.lastSeen) > STALE_TIMEOUT then
+                    trackedEntities[id] = nil
+                end
+                -- Remove old synthetic entries (ce_ prefix, no lastSeen)
+                if type(id) == "string" and id:sub(1, 3) == "ce_" then
+                    trackedEntities[id] = nil
+                end
             end
         end
 
@@ -741,7 +811,7 @@ do
             end
         end
 
-        for _, spawn in ipairs(_bossSpawns) do
+        for _, spawn in ipairs(getBossSpawns()) do
             local bestId, bestDist = nil, 200
             for id, ent in pairs(trackedEntities) do
                 if ent.health > 0 and ent.pos and ent.name == "" then
@@ -757,6 +827,7 @@ do
             end
         end
 
+        local ceFoundId, ceFoundEnt
         pcall(function()
             local ce = workspace:FindFirstChild("ClientEntities")
             if not ce then return end
@@ -764,9 +835,10 @@ do
                 if model:IsA("Model") and isBossName(model.Name) then
                     local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
                     if part then
-                        local bestId, bestDist = nil, 50
+                        -- Only match unnamed or boss-named tracked entities near this model
+                        local bestId, bestDist = nil, 100
                         for id, ent in pairs(trackedEntities) do
-                            if ent.pos and ent.health > 0 then
+                            if ent.pos and ent.health > 0 and (ent.name == "" or isBossName(ent.name)) then
                                 local entPos = typeof(ent.pos) == "Vector3" and ent.pos
                                     or Vector3.new(ent.pos.X or 0, ent.pos.Y or 0, ent.pos.Z or 0)
                                 local dist = (part.Position - entPos).Magnitude
@@ -775,12 +847,15 @@ do
                         end
                         if bestId then
                             trackedEntities[bestId].name = model.Name
-                            return bestId, trackedEntities[bestId]
+                            ceFoundId = bestId
+                            ceFoundEnt = trackedEntities[bestId]
+                            return
                         end
                     end
                 end
             end
         end)
+        if ceFoundId then return ceFoundId, ceFoundEnt end
 
         return nil, nil
     end
@@ -798,6 +873,7 @@ do
                     if fighting then
                         _combatTargetPart = nil
                         stopSkillSpam()
+                        stopAutoClick()
                         killCount += 1
                         fighting = false
                         currentTarget = "None"
@@ -814,7 +890,9 @@ do
                     fighting = true
                     currentTarget = boss.name
                     pressKey(Enum.KeyCode.Four)
+                    equipSpecial()
                     startSkillSpam()
+                    startAutoClick()
                 end
 
                 local pct = boss.maxHealth > 0 and math.floor(boss.health / boss.maxHealth * 100) or 0
@@ -822,49 +900,63 @@ do
 
                 local capturedId = bossId
                 pcall(function()
-                    local ce = workspace:FindFirstChild("ClientEntities")
-                    if not ce then return end
-                    -- Try exact name match (strip spaces, case-insensitive)
-                    local bossKey = boss.name:gsub("%s+", ""):lower()
-                    local found = false
-                    for _, model in ipairs(ce:GetChildren()) do
-                        if model:IsA("Model") and model.Name:gsub("%s+", ""):lower() == bossKey then
-                            local part = model:FindFirstChild("HumanoidRootPart")
-                                or model:FindFirstChild("RootPart")
-                                or model.PrimaryPart
-                                or model:FindFirstChildWhichIsA("BasePart")
-                            if part then
-                                _combatTargetPart = part
-                                _combatOffset = CFrame.new(0, 2, 5)
-                                found = true
-                            end
-                            break
-                        end
+                    -- Try findEntityModel (name match + position fallback)
+                    local model, part = findEntityModel(capturedId)
+                    if part then
+                        _combatTargetPart = part
+                        _combatOffset = CFrame.new(0, 2, 15)
+                        return
                     end
-                    -- Fallback: find closest model to tracked position
-                    if not found and boss.pos then
-                        local entPos = typeof(boss.pos) == "Vector3" and boss.pos
-                            or Vector3.new(boss.pos.X or 0, boss.pos.Y or 0, boss.pos.Z or 0)
-                        local bestPart, bestDist = nil, 50
-                        for _, model in ipairs(ce:GetChildren()) do
-                            if model:IsA("Model") then
-                                local part = model:FindFirstChild("HumanoidRootPart")
-                                    or model:FindFirstChild("RootPart")
-                                    or model.PrimaryPart
-                                    or model:FindFirstChildWhichIsA("BasePart")
-                                if part then
-                                    local d = (part.Position - entPos).Magnitude
-                                    if d < bestDist then
-                                        bestDist = d
-                                        bestPart = part
+                    -- Scan ClientEntities by stripped name
+                    local ce = workspace:FindFirstChild("ClientEntities")
+                    if ce then
+                        local bossKey = boss.name:gsub("[_%s]", ""):lower()
+                        for _, m in ipairs(ce:GetChildren()) do
+                            if m:IsA("Model") and m.Name:gsub("[_%s]", ""):lower() == bossKey then
+                                local p = m:FindFirstChild("HumanoidRootPart")
+                                    or m:FindFirstChild("RootPart")
+                                    or m.PrimaryPart
+                                    or m:FindFirstChildWhichIsA("BasePart")
+                                if p then
+                                    _combatTargetPart = p
+                                    _combatOffset = CFrame.new(0, 2, 15)
+                                    return
+                                end
+                                break
+                            end
+                        end
+                        -- Closest model to tracked position
+                        if boss.pos then
+                            local entPos = typeof(boss.pos) == "Vector3" and boss.pos
+                                or Vector3.new(boss.pos.X or 0, boss.pos.Y or 0, boss.pos.Z or 0)
+                            local bestPart, bestDist = nil, 100
+                            for _, m in ipairs(ce:GetChildren()) do
+                                if m:IsA("Model") then
+                                    local p = m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+                                    if p then
+                                        local d = (p.Position - entPos).Magnitude
+                                        if d < bestDist then bestDist = d; bestPart = p end
                                     end
                                 end
                             end
+                            if bestPart then
+                                _combatTargetPart = bestPart
+                                _combatOffset = CFrame.new(0, 2, 15)
+                                return
+                            end
                         end
-                        if bestPart then
-                            _combatTargetPart = bestPart
-                            _combatOffset = CFrame.new(0, 2, 5)
-                        end
+                    end
+                    -- No model found — teleport to tracked position or spawn point
+                    local tpPos = nil
+                    if boss.pos then
+                        tpPos = typeof(boss.pos) == "Vector3" and boss.pos
+                            or Vector3.new(boss.pos.X or 0, boss.pos.Y or 0, boss.pos.Z or 0)
+                    end
+                    -- Prefer spawn point (always accurate) over tracked pos (can be stale)
+                    local spawnPos = getBossSpawnPos(boss.name)
+                    if spawnPos then tpPos = spawnPos end
+                    if tpPos then
+                        teleportTo(CFrame.new(tpPos + Vector3.new(0, 5, 0)))
                     end
                 end)
 
@@ -880,12 +972,13 @@ do
         if active and fighting then
             task.wait(2)
             pressKey(Enum.KeyCode.Four)
+            equipSpecial()
         end
     end)
 
     _G.AutoBoss = {
         enable   = function() active = true end,
-        disable  = function() active = false; fighting = false; lastBossId = nil; _combatTargetPart = nil; stopSkillSpam() end,
+        disable  = function() active = false; fighting = false; lastBossId = nil; _combatTargetPart = nil; stopSkillSpam(); stopAutoClick() end,
         toggle   = function(v) if v == nil then v = not active end; if v then _G.AutoBoss.enable() else _G.AutoBoss.disable() end end,
         isActive = function() return active end,
         isFighting = function() return fighting end,
@@ -904,48 +997,79 @@ do
     local currentTarget = "None"
     local initialTeleported = {}
     local lastMobId = nil
+    local useSkills = savedState.mobSkills ~= false
 
     local function getMobList()
+        nameUnnamedEntities(true)
         local mobs = {}
         local seen = {}
-        local mobHp = {} -- name -> {hp, maxHp}
-        -- Get HP from tracked entities
-        for _, ent in pairs(trackedEntities) do
-            if ent.name ~= "" and not isBossName(ent.name) and ent.name:lower() ~= "kurama" then
-                if not mobHp[ent.name] or ent.health > 0 then
-                    mobHp[ent.name] = { hp = ent.health, maxHp = ent.maxHealth }
+
+        -- 1. Spawn points — discovers ALL mob types in the game regardless of distance
+        pcall(function()
+            local spawns = workspace:FindFirstChild("Spawns")
+            if not spawns then return end
+            for _, folder in ipairs(spawns:GetChildren()) do
+                if folder.Name == "Bosses" then continue end -- skip boss folder
+                local children = folder:IsA("Folder") and folder:GetChildren() or {}
+                for _, child in ipairs(children) do
+                    local name = child.Name
+                    if not seen[name] and not isBossName(name) and name:lower() ~= "kurama" then
+                        seen[name] = true
+                        table.insert(mobs, { name = name, label = name })
+                    end
                 end
             end
-        end
-        pcall(function()
-            local ce = workspace:FindFirstChild("ClientEntities")
-            if not ce then return end
-            for _, model in ipairs(ce:GetChildren()) do
-                if model:IsA("Model") and not seen[model.Name]
-                    and not isBossName(model.Name)
-                    and model.Name:lower() ~= "kurama" then
-                    seen[model.Name] = true
-                    local hp = mobHp[model.Name]
-                    local label = model.Name
-                    if hp and hp.maxHp > 0 then
-                        label = model.Name .. " (HP: " .. tostring(hp.maxHp) .. ")"
+            -- Also check direct children of Spawns (if mobs aren't in subfolders)
+            for _, child in ipairs(spawns:GetChildren()) do
+                if child:IsA("BasePart") and not child:IsA("Folder") then
+                    local name = child.Name
+                    if not seen[name] and not isBossName(name) and name:lower() ~= "kurama" then
+                        seen[name] = true
+                        table.insert(mobs, { name = name, label = name })
                     end
-                    table.insert(mobs, { name = model.Name, label = label })
                 end
             end
         end)
+
+        -- 2. ClientEntities models (nearby loaded)
+        local ce = workspace:FindFirstChild("ClientEntities")
+        if ce then
+            for _, child in ipairs(ce:GetChildren()) do
+                if child:IsA("Model") and not seen[child.Name]
+                    and not isBossName(child.Name)
+                    and child.Name:lower() ~= "kurama" then
+                    seen[child.Name] = true
+                    table.insert(mobs, { name = child.Name, label = child.Name })
+                end
+            end
+        end
+
+        -- 3. Server-tracked entities (may have names not in spawns or models)
         for _, ent in pairs(trackedEntities) do
             if ent.name ~= "" and not seen[ent.name]
                 and not isBossName(ent.name)
                 and ent.name:lower() ~= "kurama"
                 and ent.health > 0 then
                 seen[ent.name] = true
-                local label = ent.name
-                if ent.maxHealth > 0 then
-                    label = ent.name .. " (HP: " .. tostring(ent.maxHealth) .. ")"
-                end
-                table.insert(mobs, { name = ent.name, label = label })
+                table.insert(mobs, { name = ent.name, label = ent.name })
             end
+        end
+
+        -- Enrich labels with HP from tracked entities
+        for _, mob in ipairs(mobs) do
+            local mobKey = mob.name:lower():gsub("[_%s]", "")
+            for _, ent in pairs(trackedEntities) do
+                if ent.maxHealth > 0 and ent.name ~= "" then
+                    if ent.name:lower():gsub("[_%s]", "") == mobKey then
+                        mob.label = mob.name .. " (HP: " .. tostring(ent.maxHealth) .. ")"
+                        break
+                    end
+                end
+            end
+        end
+
+        if #mobs == 0 then
+            table.insert(mobs, { name = "No Mobs Found", label = "No Mobs Found" })
         end
         table.sort(mobs, function(a, b) return a.name < b.name end)
         return mobs
@@ -985,6 +1109,7 @@ do
                 if not mobId then
                     if currentTarget ~= "None" then
                         _combatTargetPart = nil
+                        stopAutoClick()
                         killCount += 1
                         currentTarget = "None"
                         lastMobId = nil
@@ -996,6 +1121,7 @@ do
                 local capturedId = mobId
                 if capturedId ~= lastMobId then
                     lastMobId = capturedId
+                    equipSpecial()
                 end
                 currentTarget = mob.name
                 pcall(function()
@@ -1011,7 +1137,7 @@ do
                                     or child:FindFirstChildWhichIsA("BasePart")
                                 if part then
                                     _combatTargetPart = part
-                                    _combatOffset = CFrame.new(0, 2, 2)
+                                    _combatOffset = CFrame.new(0, 2, 4)
                                 end
                             end
                             break
@@ -1021,7 +1147,8 @@ do
                 if type(mobId) == "number" then
                     zapFire(ClientEvents.attemptHitMobs, {mobId}, {0})
                 end
-                startSkillSpam()
+                if useSkills then startSkillSpam() else stopSkillSpam() end
+                startAutoClick()
                 statusText = "Farming: " .. mob.name
             end)
             task.wait()
@@ -1030,7 +1157,7 @@ do
 
     _G.AutoMob = {
         enable = function() active = true end,
-        disable = function() active = false; currentTarget = "None"; initialTeleported = {}; lastMobId = nil; _combatTargetPart = nil; stopSkillSpam() end,
+        disable = function() active = false; currentTarget = "None"; initialTeleported = {}; lastMobId = nil; _combatTargetPart = nil; stopSkillSpam(); stopAutoClick() end,
         toggle = function(v) if v == nil then v = not active end; if v then _G.AutoMob.enable() else _G.AutoMob.disable() end end,
         isActive = function() return active end,
         isFighting = function() return active and currentTarget ~= "None" end,
@@ -1043,6 +1170,12 @@ do
             if selectedMobs[name] then selectedMobs[name] = nil
             else selectedMobs[name] = true end
         end,
+        toggleSkills = function()
+            useSkills = not useSkills
+            if not useSkills then stopSkillSpam()
+            elseif active and currentTarget ~= "None" then startSkillSpam() end
+        end,
+        isSkillsActive = function() return useSkills end,
     }
 end
 
@@ -1161,6 +1294,7 @@ do
             if died then
                 stopKuramaLook()
                 stopKuramaClick()
+                stopAutoClick()
                 _combatTargetPart = nil
                 stopSkillSpam()
                 fighting = false
@@ -1168,6 +1302,7 @@ do
                 task.wait(2) -- let character fully load
                 died = false
                 pressKey(Enum.KeyCode.Four)
+                equipSpecial()
                 statusText = "Respawned — heading to totem..."
             end
 
@@ -1182,8 +1317,10 @@ do
                             task.wait(0.1)
                             pressKey(Enum.KeyCode.Four)
                         end)
+                        equipSpecial()
                         startKuramaLook()
                         startKuramaClick()
+                        startAutoClick()
                         startSkillSpam()
                     end
                     local kuramaPart = findKuramaPart()
@@ -1199,6 +1336,7 @@ do
                 else
                     stopKuramaLook()
                     stopKuramaClick()
+                    stopAutoClick()
                     _combatTargetPart = nil
                     stopSkillSpam()
                     if fighting then
@@ -1252,7 +1390,7 @@ do
 
     _G.AutoKurama = {
         enable = function() active = true end,
-        disable = function() active = false; fighting = false; stopKuramaLook(); stopKuramaClick(); _combatTargetPart = nil; stopSkillSpam() end,
+        disable = function() active = false; fighting = false; stopKuramaLook(); stopKuramaClick(); stopAutoClick(); _combatTargetPart = nil; stopSkillSpam() end,
         toggle = function(v) if v == nil then v = not active end; if v then _G.AutoKurama.enable() else _G.AutoKurama.disable() end end,
         isActive = function() return active end,
         isFighting = function() return fighting end,
@@ -1637,7 +1775,7 @@ mkGrad(tabDiv, C_DIV, Color3.fromRGB(150, 20, 55), 0)
 
 -- ─── Content Frames ──────────────────────────────────────────────────────────
 local contentFrames = {}
-local PANEL_HEIGHTS = {310, 190, 240}
+local PANEL_HEIGHTS = {310, 260, 268}
 for i, _ in ipairs(TAB_NAMES) do
     local f = Instance.new("Frame", panel)
     f.Position = UDim2.new(0, 0, 0, 61)
@@ -2195,6 +2333,23 @@ kuramaKillLbl.Text = "Kurama Kills: 0"
 kuramaKillLbl.TextSize = 10
 kuramaKillLbl.Font = Enum.Font.Gotham
 kuramaKillLbl.TextXAlignment = Enum.TextXAlignment.Left
+cy = cy + 18
+
+hLine(combatFrame, cy); cy = cy + 6
+
+-- Special Key Dropdown
+local specialOpts = {
+    {value = "5", display = "Key 5"}, {value = "6", display = "Key 6"},
+    {value = "7", display = "Key 7"}, {value = "8", display = "Key 8"},
+    {value = "9", display = "Key 9"}, {value = "0", display = "Key 0"},
+}
+local specialDropdown = makeDropdown(combatFrame, "Special Slot Key", cy, specialOpts, function(val)
+    _specialKeyCode = _specialKeyMap[val] or Enum.KeyCode.Five
+    local state = loadState()
+    state.specialKey = val
+    saveState(state)
+end)
+specialDropdown.btn.Text = "Key " .. (savedState.specialKey or "5")
 
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- TAB 3: MOBS
@@ -2205,6 +2360,47 @@ local my = 6
 -- Auto Mob Toggle
 makeToggleBtn(mobsFrame, TOGGLE_DEFS[4], 6, W - 16, my)
 my = my + 32
+
+-- Auto Skills Toggle
+local skillsBtn = Instance.new("TextButton", mobsFrame)
+skillsBtn.Size = UDim2.new(0, W - 16, 0, 24)
+skillsBtn.Position = UDim2.new(0, 6, 0, my)
+skillsBtn.BackgroundColor3 = C_BTN_ON
+skillsBtn.TextColor3 = C_BTXT_ON
+skillsBtn.Text = "Auto Skills: ON"
+skillsBtn.TextSize = 11
+skillsBtn.Font = Enum.Font.GothamBold
+skillsBtn.BorderSizePixel = 0
+Instance.new("UICorner", skillsBtn).CornerRadius = UDim.new(0, 6)
+local skillsBtnStroke = mkStroke(skillsBtn, C_BSTR_ON, 1.5, 0.1)
+local function refreshSkillsBtn()
+    local on = _G.AutoMob and _G.AutoMob.isSkillsActive and _G.AutoMob.isSkillsActive()
+    skillsBtn.Text = "Auto Skills: " .. (on and "ON" or "OFF")
+    if on then
+        skillsBtn.BackgroundColor3 = C_BTN_ON
+        skillsBtn.TextColor3 = C_BTXT_ON
+        skillsBtnStroke.Color = C_BSTR_ON
+        skillsBtnStroke.Transparency = 0.1
+    else
+        skillsBtn.BackgroundColor3 = C_BTN_OFF
+        skillsBtn.TextColor3 = C_BTXT_OFF
+        skillsBtnStroke.Color = C_BSTR_OFF
+        skillsBtnStroke.Transparency = 0.2
+    end
+end
+refreshSkillsBtn()
+skillsBtn.MouseButton1Click:Connect(function()
+    pcall(function()
+        _G.AutoMob.toggleSkills()
+        refreshSkillsBtn()
+        local state = loadState()
+        state.mobSkills = _G.AutoMob.isSkillsActive()
+        saveState(state)
+    end)
+end)
+table.insert(refreshFns, refreshSkillsBtn)
+setTooltip(skillsBtn, "Toggle skill spam during mob farm")
+my = my + 28
 
 -- Mob status
 local mobStatusLbl = Instance.new("TextLabel", mobsFrame)
