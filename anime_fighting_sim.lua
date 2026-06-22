@@ -1,6 +1,6 @@
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- Devilish Scripts — AFS (Anime Fighting Simulator)
--- Features: Auto Train, Auto Boss + Skills, Auto Adventure
+-- Features: Auto Train, Auto Boss, Auto Mob Farm, Auto Kurama, Auto Adventure
 -- ═══════════════════════════════════════════════════════════════════════════════
 if _G.AFS_LOADED then
     pcall(function() if _G.AFSMain then _G.AFSMain.close() end end)
@@ -149,13 +149,285 @@ local function scanPlayerStats()
 end
 
 -- ─── VIM Key Helper ───────────────────────────────────────────────────────────
+local VIM = game:GetService("VirtualInputManager")
 local function pressKey(keyCode)
     pcall(function()
-        local vim = game:GetService("VirtualInputManager")
-        vim:SendKeyEvent(true, keyCode, false, game)
-        task.delay(0.05, function()
-            pcall(function() vim:SendKeyEvent(false, keyCode, false, game) end)
-        end)
+        VIM:SendKeyEvent(true, keyCode, false, game)
+        task.wait(0.02)
+        VIM:SendKeyEvent(false, keyCode, false, game)
+    end)
+end
+
+-- ─── Stay-Behind System (instant, every frame) ─────────────────────────────
+local getEntityHeadCFrame -- forward declaration (defined after entity tracking)
+
+-- ─── Shared Combat Positioning (Heartbeat) ──────────────────────────────────
+-- Set _combatTargetPart and _combatOffset to position player each frame.
+local _combatTargetPart = nil -- BasePart to follow
+local _combatOffset = CFrame.new(0, 2, 2) -- local-space offset from target
+
+game:GetService("RunService").Heartbeat:Connect(function()
+    local part = _combatTargetPart
+    if not part or not part.Parent then return end
+    local hrp = getHRP()
+    if not hrp then return end
+    local behindPos = (part.CFrame * _combatOffset).Position
+    hrp.CFrame = CFrame.lookAt(behindPos, part.Position)
+end)
+
+local function stopBehind()
+    _combatTargetPart = nil
+end
+
+-- ─── Entity Tracking (shared across combat features) ────────────────────────
+local trackedEntities = {}
+local _knownBossNames = {} -- dynamic set: lowercase name -> true
+
+local function refreshBossNames()
+    pcall(function()
+        local spawns = workspace:FindFirstChild("Spawns")
+        local bossFolder = spawns and spawns:FindFirstChild("Bosses")
+        if not bossFolder then return end
+        for _, child in ipairs(bossFolder:GetChildren()) do
+            if child:IsA("BasePart") then
+                _knownBossNames[child.Name:lower()] = true
+            end
+        end
+    end)
+end
+
+local function isBossName(name)
+    if not name or name == "" then return false end
+    local lower = name:lower()
+    if _knownBossNames[lower] then return true end
+    local stripped = lower:gsub("[_%s]", "")
+    for boss in pairs(_knownBossNames) do
+        if stripped == boss:gsub("%s", "") then return true end
+    end
+    return false
+end
+
+task.spawn(function()
+    while true do
+        refreshBossNames()
+        task.wait(30)
+    end
+end)
+
+local _entityModelCache = {} -- entityId -> {model, part}
+
+local function findEntityModel(entityId)
+    -- Check cache
+    local cached = _entityModelCache[entityId]
+    if cached and cached.model and cached.model.Parent then return cached.model, cached.part end
+    _entityModelCache[entityId] = nil
+
+    local ent = trackedEntities[entityId]
+    if not ent then return nil, nil end
+
+    local ce = workspace:FindFirstChild("ClientEntities")
+    if not ce then return nil, nil end
+
+    local model = nil
+    -- Try name match first
+    if ent.name ~= "" then
+        for _, m in ipairs(ce:GetChildren()) do
+            if m:IsA("Model") and m.Name:lower():find(ent.name:lower(), 1, true) then
+                model = m break
+            end
+        end
+    end
+    -- Fallback: closest model to tracked position
+    if not model and ent.pos then
+        local entPos = typeof(ent.pos) == "Vector3" and ent.pos
+            or Vector3.new(ent.pos.X or 0, ent.pos.Y or 0, ent.pos.Z or 0)
+        local bestDist = 30
+        for _, m in ipairs(ce:GetChildren()) do
+            if m:IsA("Model") then
+                local p = m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+                if p then
+                    local d = (p.Position - entPos).Magnitude
+                    if d < bestDist then bestDist = d; model = m end
+                end
+            end
+        end
+    end
+    if not model then return nil, nil end
+
+    -- Find best part with rotation (HumanoidRootPart > RootPart > PrimaryPart > any BasePart)
+    local part = model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("RootPart")
+        or model.PrimaryPart
+        or model:FindFirstChildWhichIsA("BasePart")
+    _entityModelCache[entityId] = { model = model, part = part }
+    return model, part
+end
+
+local function getEntityCFrame(entityId)
+    local _, part = findEntityModel(entityId)
+    if part then return part.CFrame end
+    -- Fallback: tracked position, face toward player so "behind" = away from player
+    local ent = trackedEntities[entityId]
+    if ent and ent.pos then
+        local pos = typeof(ent.pos) == "Vector3" and ent.pos
+            or Vector3.new(ent.pos.X or 0, ent.pos.Y or 0, ent.pos.Z or 0)
+        local hrp = getHRP()
+        if hrp then
+            return CFrame.lookAt(pos, hrp.Position)
+        end
+        return CFrame.new(pos)
+    end
+    return nil
+end
+
+getEntityHeadCFrame = function(entityId)
+    local model, bodyPart = findEntityModel(entityId)
+    if model then
+        local head = model:FindFirstChild("Head")
+        if head and head:IsA("BasePart") then return head.CFrame end
+        if bodyPart then
+            local ok, _, size = pcall(function() return model:GetBoundingBox() end)
+            local headOffset = (ok and size) and (size.Y / 2 - 0.5) or 2
+            return bodyPart.CFrame * CFrame.new(0, headOffset, 0)
+        end
+    end
+    return getEntityCFrame(entityId)
+end
+
+local function isEntityAlive(entityId)
+    local ent = trackedEntities[entityId]
+    if not ent or ent.health <= 0 then return false end
+    return findEntityModel(entityId) ~= nil
+end
+
+local function getEntityHitboxDepth(entityId)
+    local model = findEntityModel(entityId)
+    if not model then return 3 end
+    local ok, _, size = pcall(function() return model:GetBoundingBox() end)
+    if ok and size then return math.max(size.Z / 2 + 1, 3) end
+    return 3
+end
+
+task.spawn(function()
+    while not ClientEvents do task.wait(1) end
+
+    zapListen(ClientEvents.spawnEntities, function(ids, names, instances, positions, _, healths, maxHealths)
+        if type(ids) ~= "table" then return end
+        for i = 1, #ids do
+            local id = ids[i]
+            if not id then continue end
+            trackedEntities[id] = {
+                name = names and names[i] and tostring(names[i]) or "Unknown",
+                pos = positions and positions[i] or nil,
+                health = healths and healths[i] or 0,
+                maxHealth = maxHealths and maxHealths[i] or 0,
+                lastSeen = tick(),
+            }
+        end
+    end)
+
+    zapListen(ClientEvents.replicateEntityHealths, function(ids, healths, maxHealths)
+        if type(ids) ~= "table" then return end
+        for i = 1, #ids do
+            local id = ids[i]
+            if not id then continue end
+            if not trackedEntities[id] then
+                trackedEntities[id] = { name = "", pos = nil, health = 0, maxHealth = 0, lastSeen = 0 }
+            end
+            trackedEntities[id].lastSeen = tick()
+            if healths and healths[i] then
+                trackedEntities[id].health = healths[i]
+                if healths[i] <= 0 and isBossName(trackedEntities[id].name) then
+                    trackedEntities[id] = nil
+                end
+            end
+            if maxHealths and maxHealths[i] then trackedEntities[id].maxHealth = maxHealths[i] end
+        end
+    end)
+
+    zapListen(ClientEvents.replicateEntities, function(data)
+        if type(data) ~= "table" then return end
+        local eids = data.ids
+        local epos = data.positions
+        if type(eids) ~= "table" or type(epos) ~= "table" then return end
+        for i = 1, #eids do
+            local id = eids[i]
+            if not id then continue end
+            if not trackedEntities[id] then
+                trackedEntities[id] = { name = "", pos = nil, health = 0, maxHealth = 0, lastSeen = 0 }
+            end
+            trackedEntities[id].lastSeen = tick()
+            if epos[i] then trackedEntities[id].pos = epos[i] end
+        end
+    end)
+end)
+
+local _lastNameScan = 0
+local function nameUnnamedEntities()
+    if tick() - _lastNameScan < 3 then return end
+    _lastNameScan = tick()
+    pcall(function()
+        local ce = workspace:FindFirstChild("ClientEntities")
+        if not ce then return end
+        for _, model in ipairs(ce:GetChildren()) do
+            if not model:IsA("Model") then continue end
+            local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+            if not part then continue end
+            local modelPos = part.Position
+            for id, ent in pairs(trackedEntities) do
+                if ent.name == "" and ent.pos then
+                    local entPos = typeof(ent.pos) == "Vector3" and ent.pos
+                        or Vector3.new(ent.pos.X or 0, ent.pos.Y or 0, ent.pos.Z or 0)
+                    if (modelPos - entPos).Magnitude < 20 then
+                        ent.name = model.Name
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- ─── Shared Skill System ────────────────────────────────────────────────────
+local _skillKeys = {
+    Enum.KeyCode.Q, Enum.KeyCode.R, Enum.KeyCode.T, Enum.KeyCode.Y,
+    Enum.KeyCode.U, Enum.KeyCode.P, Enum.KeyCode.F, Enum.KeyCode.G,
+    Enum.KeyCode.H, Enum.KeyCode.J, Enum.KeyCode.K, Enum.KeyCode.L,
+    Enum.KeyCode.Z, Enum.KeyCode.V, Enum.KeyCode.B, Enum.KeyCode.N,
+    Enum.KeyCode.M,
+}
+
+local _skillSpamRunning = false
+local _skillSpamThread = nil
+
+local function startSkillSpam()
+    if _skillSpamRunning then return end
+    _skillSpamRunning = true
+    _skillSpamThread = task.spawn(function()
+        while _skillSpamRunning do
+            for _, keyCode in ipairs(_skillKeys) do
+                task.spawn(pressKey, keyCode)
+            end
+            task.wait(0.2)
+        end
+    end)
+end
+
+local function stopSkillSpam()
+    _skillSpamRunning = false
+    if _skillSpamThread then
+        pcall(task.cancel, _skillSpamThread)
+        _skillSpamThread = nil
+    end
+end
+
+local function _simulateClick()
+    pcall(function()
+        local VU = game:GetService("VirtualUser")
+        VU:CaptureController()
+        VU:ClickButton1(Vector2.new(
+            workspace.CurrentCamera.ViewportSize.X / 2,
+            workspace.CurrentCamera.ViewportSize.Y / 2
+        ))
     end)
 end
 
@@ -167,22 +439,13 @@ do
     local active = false
     local selectedStat = "All"
     local currentStat = "All"
+    local ZONE_STATS = {"Strength", "Durability", "Chakra", "Sword"}
     local statIdx = 1
     local statusText = "Idle"
     local chakraActive = false -- true = key 3 was pressed, Chakra training on
     local wasFighting = false  -- track boss state transitions
-    local CYCLE_STATS = {"Strength", "Durability", "Chakra", "Sword"} -- no Speed/Agility teleport
 
-    local function simulateClick()
-        pcall(function()
-            local VU = game:GetService("VirtualUser")
-            VU:CaptureController()
-            VU:ClickButton1(Vector2.new(
-                workspace.CurrentCamera.ViewportSize.X / 2,
-                workspace.CurrentCamera.ViewportSize.Y / 2
-            ))
-        end)
-    end
+    local function simulateClick() _simulateClick() end
 
     local function enableChakra()
         if chakraActive then return end
@@ -196,7 +459,7 @@ do
         pressKey(Enum.KeyCode.Three) -- toggle off
     end
 
-    -- Zap train all stats simultaneously (5 via Zap, Chakra via key 3 already active)
+    -- Zap train all stats simultaneously. Chakra requires key 3 toggle.
     local function trainAllStats()
         if not ClientEvents then return end
         for _, stat in ipairs(STAT_TYPES) do
@@ -353,45 +616,55 @@ do
             if not active then task.wait(0.5); continue end
             if not ClientEvents then task.wait(1); continue end
 
-            local isFighting = _G.AutoBoss and _G.AutoBoss.isFighting and _G.AutoBoss.isFighting()
-
-            -- Boss state transitions
-            if isFighting and not wasFighting then
-                -- Training → Boss: disable Chakra (Sword handled by Auto Boss)
-                disableChakra()
-                wasFighting = true
-            elseif not isFighting and wasFighting then
-                -- Boss → Training: re-enable Chakra
-                enableChakra()
-                wasFighting = false
-            end
+            local isFighting = (_G.AutoBoss and _G.AutoBoss.isFighting and _G.AutoBoss.isFighting())
+                or (_G.AutoMob and _G.AutoMob.isFighting and _G.AutoMob.isFighting())
+                or (_G.AutoKurama and _G.AutoKurama.isFighting and _G.AutoKurama.isFighting())
 
             if isFighting then
-                statusText = "Paused (Boss)"
-                task.wait(1)
+                if not wasFighting then
+                    disableChakra()
+                    wasFighting = true
+                end
+                statusText = "Paused (Combat)"
+                task.wait(0.1)
                 continue
+            end
+
+            -- Not fighting — ensure chakra is on
+            if wasFighting then
+                chakraActive = false -- combat reset, force re-press
+                wasFighting = false
+            end
+            if not chakraActive then
+                enableChakra()
             end
 
             pcall(function()
                 if selectedStat == "All" then
-                    local zoneStat = CYCLE_STATS[statIdx]
+                    local zoneStat = ZONE_STATS[statIdx]
                     currentStat = zoneStat
                     teleportToZone(zoneStat)
                     trainAllStats()
 
                     local zoneEnd = tick() + 20
                     while active and tick() < zoneEnd do
-                        if _G.AutoBoss and _G.AutoBoss.isFighting and _G.AutoBoss.isFighting() then break end
+                        if (_G.AutoBoss and _G.AutoBoss.isFighting and _G.AutoBoss.isFighting())
+                            or (_G.AutoMob and _G.AutoMob.isFighting and _G.AutoMob.isFighting())
+                            or (_G.AutoKurama and _G.AutoKurama.isFighting and _G.AutoKurama.isFighting()) then break end
                         trainAllStats()
                         task.wait(jitter(0.5, 0.2))
                     end
-                    statIdx = (statIdx % #CYCLE_STATS) + 1
+                    statIdx = (statIdx % #ZONE_STATS) + 1
                 else
                     currentStat = selectedStat
-                    teleportToZone(selectedStat)
+                    if selectedStat ~= "Speed" and selectedStat ~= "Agility" then
+                        teleportToZone(selectedStat)
+                    end
                     local zoneEnd = tick() + 20
                     while active and tick() < zoneEnd do
-                        if _G.AutoBoss and _G.AutoBoss.isFighting and _G.AutoBoss.isFighting() then break end
+                        if (_G.AutoBoss and _G.AutoBoss.isFighting and _G.AutoBoss.isFighting())
+                            or (_G.AutoMob and _G.AutoMob.isFighting and _G.AutoMob.isFighting())
+                            or (_G.AutoKurama and _G.AutoKurama.isFighting and _G.AutoKurama.isFighting()) then break end
                         trainSingleStat(selectedStat)
                         task.wait(jitter(0.5, 0.2))
                     end
@@ -399,6 +672,10 @@ do
             end)
             task.wait(0.1)
         end
+    end)
+
+    PL.CharacterAdded:Connect(function()
+        chakraActive = false -- death resets in-game chakra
     end)
 
     _G.AutoTrain = {
@@ -429,114 +706,8 @@ do
     local statusText = "Idle"
     local lastBossId = nil
 
-    -- ─── Entity Tracking (via Zap callbacks) ─────────────────────────────────
-    local trackedEntities = {} -- [id] = {name, pos, health, maxHealth}
-    local WORLD_BOSS_NAMES = {"armored titan", "great ape", "crocodile"}
-
-    local function isBossName(name)
-        local lower = name:lower()
-        for _, boss in ipairs(WORLD_BOSS_NAMES) do
-            if lower:find(boss, 1, true) or lower:gsub("[_%s]", "") == boss:gsub("%s", "") then
-                return true
-            end
-        end
-        return false
-    end
-
-    task.spawn(function()
-        while not ClientEvents do task.wait(1) end
-
-        -- spawnEntities: 7 parallel arrays (ids, names, instances, positions, ?, health, maxHealth)
-        zapListen(ClientEvents.spawnEntities, function(ids, names, instances, positions, _, healths, maxHealths)
-            if type(ids) ~= "table" then return end
-            for i = 1, #ids do
-                local id = ids[i]
-                if not id then continue end
-                local name = names and names[i] and tostring(names[i]) or "Unknown"
-                local hp = maxHealths and maxHealths[i] or 0
-                trackedEntities[id] = {
-                    name = name,
-                    pos = positions and positions[i] or nil,
-                    health = healths and healths[i] or 0,
-                    maxHealth = hp,
-                    lastSeen = tick(),
-                }
-                if isBossName(name) then
-                end
-            end
-        end)
-
-        -- replicateEntityHealths: 3 parallel arrays (ids, currentHP, maxHP)
-        -- Track ALL entities (not just spawned ones) so pre-existing bosses get picked up
-        zapListen(ClientEvents.replicateEntityHealths, function(ids, healths, maxHealths)
-            if type(ids) ~= "table" then return end
-            for i = 1, #ids do
-                local id = ids[i]
-                if not id then continue end
-                if not trackedEntities[id] then
-                    trackedEntities[id] = { name = "", pos = nil, health = 0, maxHealth = 0, lastSeen = 0 }
-                end
-                trackedEntities[id].lastSeen = tick()
-                if healths and healths[i] then
-                    trackedEntities[id].health = healths[i]
-                    -- Instant boss death detection when HP hits 0
-                    if healths[i] <= 0 and isBossName(trackedEntities[id].name) then
-                        trackedEntities[id] = nil
-                    end
-                end
-                if maxHealths and maxHealths[i] then trackedEntities[id].maxHealth = maxHealths[i] end
-            end
-        end)
-
-        -- replicateEntities: {ids, positions, rotations} — position updates
-        zapListen(ClientEvents.replicateEntities, function(data)
-            if type(data) ~= "table" then return end
-            local eids = data.ids
-            local epos = data.positions
-            if type(eids) ~= "table" or type(epos) ~= "table" then return end
-            for i = 1, #eids do
-                local id = eids[i]
-                if not id then continue end
-                if not trackedEntities[id] then
-                    trackedEntities[id] = { name = "", pos = nil, health = 0, maxHealth = 0, lastSeen = 0 }
-                end
-                trackedEntities[id].lastSeen = tick()
-                if epos[i] then trackedEntities[id].pos = epos[i] end
-            end
-        end)
-
-    end)
-
-    -- Name unnamed entities by matching positions to ClientEntities models
-    local _lastNameScan = 0
-    local function nameUnnamedEntities()
-        if tick() - _lastNameScan < 3 then return end
-        _lastNameScan = tick()
-        pcall(function()
-            local ce = workspace:FindFirstChild("ClientEntities")
-            if not ce then return end
-            for _, model in ipairs(ce:GetChildren()) do
-                if not model:IsA("Model") then continue end
-                local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
-                if not part then continue end
-                local modelPos = part.Position
-                for id, ent in pairs(trackedEntities) do
-                    if ent.name == "" and ent.pos then
-                        local entPos = typeof(ent.pos) == "Vector3" and ent.pos
-                            or Vector3.new(ent.pos.X or 0, ent.pos.Y or 0, ent.pos.Z or 0)
-                        if (modelPos - entPos).Magnitude < 20 then
-                            ent.name = model.Name
-                            if isBossName(model.Name) then
-                            end
-                        end
-                    end
-                end
-            end
-        end)
-    end
-
-    -- Get boss spawn positions (permanent markers)
-    local _bossSpawns = {} -- {name, pos}
+    -- Boss spawn positions (permanent markers)
+    local _bossSpawns = {}
     local function loadBossSpawns()
         if #_bossSpawns > 0 then return end
         pcall(function()
@@ -544,20 +715,19 @@ do
             local bossFolder = spawns and spawns:FindFirstChild("Bosses")
             if not bossFolder then return end
             for _, child in ipairs(bossFolder:GetChildren()) do
-                if child:IsA("BasePart") and isBossName(child.Name) then
+                if child:IsA("BasePart") then
                     table.insert(_bossSpawns, { name = child.Name, pos = child.Position })
                 end
             end
         end)
     end
 
-    local STALE_TIMEOUT = 15 -- seconds without update = entity dead/gone
+    local STALE_TIMEOUT = 15
 
     local function findBoss()
         nameUnnamedEntities()
         loadBossSpawns()
 
-        -- Clean up stale boss entities (server stopped sending updates = dead)
         local now = tick()
         for id, ent in pairs(trackedEntities) do
             if isBossName(ent.name) and ent.lastSeen and (now - ent.lastSeen) > STALE_TIMEOUT then
@@ -565,14 +735,12 @@ do
             end
         end
 
-        -- 1. Check tracked entities that already have a boss name
         for id, ent in pairs(trackedEntities) do
             if ent.health > 0 and isBossName(ent.name) then
                 return id, ent
             end
         end
 
-        -- 2. Match unnamed entities to boss spawn points (entity must be near a spawn)
         for _, spawn in ipairs(_bossSpawns) do
             local bestId, bestDist = nil, 200
             for id, ent in pairs(trackedEntities) do
@@ -580,10 +748,7 @@ do
                     local entPos = typeof(ent.pos) == "Vector3" and ent.pos
                         or Vector3.new(ent.pos.X or 0, ent.pos.Y or 0, ent.pos.Z or 0)
                     local dist = (spawn.pos - entPos).Magnitude
-                    if dist < bestDist then
-                        bestDist = dist
-                        bestId = id
-                    end
+                    if dist < bestDist then bestDist = dist; bestId = id end
                 end
             end
             if bestId then
@@ -592,7 +757,6 @@ do
             end
         end
 
-        -- 3. Check ClientEntities (boss model appears when nearby)
         pcall(function()
             local ce = workspace:FindFirstChild("ClientEntities")
             if not ce then return end
@@ -600,7 +764,6 @@ do
                 if model:IsA("Model") and isBossName(model.Name) then
                     local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
                     if part then
-                        -- Match to nearest entity
                         local bestId, bestDist = nil, 50
                         for id, ent in pairs(trackedEntities) do
                             if ent.pos and ent.health > 0 then
@@ -622,59 +785,7 @@ do
         return nil, nil
     end
 
-    -- ─── Auto Skills (VIM key presses, active during boss fights) ────────────
-    local _skillKeys = {} -- discovered keybinds (Enum.KeyCode values)
-    local _skillsLastScan = 0
-
-    -- Discover skill keybinds from PlayerGui (rescans every 10s)
-    local function scanSkillKeybinds()
-        if tick() - _skillsLastScan < 10 then return end
-        _skillsLastScan = tick()
-        local keys = {}
-        local seen = {}
-        pcall(function()
-            for _, obj in ipairs(PL.PlayerGui:GetDescendants()) do
-                if obj:IsA("TextLabel") and obj.Name == "Key" and #obj.Text == 1 then
-                    local parent = obj.Parent
-                    if not parent then continue end
-                    local pName = parent.Name:lower()
-                    if pName == "hotbar" or pName == "strength" or pName == "durability"
-                        or pName == "chakra" or pName == "sword" or pName == "speed" or pName == "agility" then
-                        continue
-                    end
-                    local letter = obj.Text:upper()
-                    if letter:match("^[A-Z]$") and not seen[letter] then
-                        seen[letter] = true
-                        local kc = Enum.KeyCode[letter]
-                        if kc then table.insert(keys, kc) end
-                    end
-                end
-            end
-        end)
-        if #keys > 0 then
-            local changed = #keys ~= #_skillKeys
-            if not changed then
-                for i, k in ipairs(keys) do
-                    if _skillKeys[i] ~= k then changed = true; break end
-                end
-            end
-            _skillKeys = keys
-            if changed then
-                local names = {}
-                for _, k in ipairs(keys) do table.insert(names, k.Name) end
-            end
-        end
-    end
-
-    local function spamSkills()
-        if not fighting then return end
-        scanSkillKeybinds()
-        for _, keyCode in ipairs(_skillKeys) do
-            pressKey(keyCode)
-        end
-    end
-
-    -- ─── Boss Loop ───────────────────────────────────────────────────────────
+    -- ─── Boss Loop (tween-behind positioning) ─────────────────────────────
     task.spawn(function()
         while true do
             if not active then task.wait(1); continue end
@@ -685,6 +796,8 @@ do
 
                 if not bossId then
                     if fighting then
+                        _combatTargetPart = nil
+                        stopSkillSpam()
                         killCount += 1
                         fighting = false
                         currentTarget = "None"
@@ -696,74 +809,455 @@ do
                     return
                 end
 
-                -- New boss detected — equip Sword (key 4) + auto skills
                 if bossId ~= lastBossId then
                     lastBossId = bossId
                     fighting = true
                     currentTarget = boss.name
-                    pressKey(Enum.KeyCode.Four) -- equip Sword for melee
-                    scanSkillKeybinds() -- pre-scan skill keys
+                    pressKey(Enum.KeyCode.Four)
+                    startSkillSpam()
                 end
 
-                -- Status with HP %
                 local pct = boss.maxHealth > 0 and math.floor(boss.health / boss.maxHealth * 100) or 0
                 statusText = "Fighting: " .. boss.name .. " (" .. pct .. "%)"
 
-                -- Teleport to boss (always, no range limit)
-                local bossPos = nil
-                -- Try tracked entity position first
-                if boss.pos then
-                    bossPos = typeof(boss.pos) == "Vector3" and boss.pos
-                        or Vector3.new(boss.pos.X or 0, boss.pos.Y or 0, boss.pos.Z or 0)
-                end
-                -- Fallback: read position directly from ClientEntities model
-                if not bossPos then
-                    pcall(function()
-                        local ce = workspace:FindFirstChild("ClientEntities")
-                        if not ce then return end
+                local capturedId = bossId
+                pcall(function()
+                    local ce = workspace:FindFirstChild("ClientEntities")
+                    if not ce then return end
+                    -- Try exact name match (strip spaces, case-insensitive)
+                    local bossKey = boss.name:gsub("%s+", ""):lower()
+                    local found = false
+                    for _, model in ipairs(ce:GetChildren()) do
+                        if model:IsA("Model") and model.Name:gsub("%s+", ""):lower() == bossKey then
+                            local part = model:FindFirstChild("HumanoidRootPart")
+                                or model:FindFirstChild("RootPart")
+                                or model.PrimaryPart
+                                or model:FindFirstChildWhichIsA("BasePart")
+                            if part then
+                                _combatTargetPart = part
+                                _combatOffset = CFrame.new(0, 2, 5)
+                                found = true
+                            end
+                            break
+                        end
+                    end
+                    -- Fallback: find closest model to tracked position
+                    if not found and boss.pos then
+                        local entPos = typeof(boss.pos) == "Vector3" and boss.pos
+                            or Vector3.new(boss.pos.X or 0, boss.pos.Y or 0, boss.pos.Z or 0)
+                        local bestPart, bestDist = nil, 50
                         for _, model in ipairs(ce:GetChildren()) do
-                            if model:IsA("Model") and isBossName(model.Name) then
-                                local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
-                                if part then bossPos = part.Position end
-                                return
+                            if model:IsA("Model") then
+                                local part = model:FindFirstChild("HumanoidRootPart")
+                                    or model:FindFirstChild("RootPart")
+                                    or model.PrimaryPart
+                                    or model:FindFirstChildWhichIsA("BasePart")
+                                if part then
+                                    local d = (part.Position - entPos).Magnitude
+                                    if d < bestDist then
+                                        bestDist = d
+                                        bestPart = part
+                                    end
+                                end
                             end
                         end
-                    end)
-                end
-                if bossPos then
-                    local hrp = getHRP()
-                    if hrp and (hrp.Position - bossPos).Magnitude > 15 then
-                        teleportTo(CFrame.new(bossPos) + Vector3.new(0, 5, 0))
-                        pressKey(Enum.KeyCode.Four) -- re-equip Sword after teleport
+                        if bestPart then
+                            _combatTargetPart = bestPart
+                            _combatOffset = CFrame.new(0, 2, 5)
+                        end
                     end
-                end
+                end)
 
-                -- Attack via Zap + skills
                 if type(bossId) == "number" then
                     zapFire(ClientEvents.attemptHitMobs, {bossId}, {0})
                 end
-                spamSkills()
             end)
-            task.wait(jitter(0.5, 0.3))
+            task.wait()
         end
     end)
 
-    -- Re-teleport on death (World Bosses send you to spawn on death)
     PL.CharacterAdded:Connect(function()
         if active and fighting then
-            task.wait(2) -- wait for character to load, boss loop re-teleports next tick
+            task.wait(2)
+            pressKey(Enum.KeyCode.Four)
         end
     end)
 
     _G.AutoBoss = {
         enable   = function() active = true end,
-        disable  = function() active = false; fighting = false; lastBossId = nil end,
+        disable  = function() active = false; fighting = false; lastBossId = nil; _combatTargetPart = nil; stopSkillSpam() end,
         toggle   = function(v) if v == nil then v = not active end; if v then _G.AutoBoss.enable() else _G.AutoBoss.disable() end end,
         isActive = function() return active end,
         isFighting = function() return fighting end,
         getKills = function() return killCount end,
         getTarget = function() return currentTarget end,
         getStatus = function() return statusText end,
+    }
+end
+
+-- ─── Feature: Auto Mob Farm ──────────────────────────────────────────────────
+do
+    local active = false
+    local selectedMobs = {}
+    local statusText = "Idle"
+    local killCount = 0
+    local currentTarget = "None"
+    local initialTeleported = {}
+    local lastMobId = nil
+
+    local function getMobList()
+        local mobs = {}
+        local seen = {}
+        local mobHp = {} -- name -> {hp, maxHp}
+        -- Get HP from tracked entities
+        for _, ent in pairs(trackedEntities) do
+            if ent.name ~= "" and not isBossName(ent.name) and ent.name:lower() ~= "kurama" then
+                if not mobHp[ent.name] or ent.health > 0 then
+                    mobHp[ent.name] = { hp = ent.health, maxHp = ent.maxHealth }
+                end
+            end
+        end
+        pcall(function()
+            local ce = workspace:FindFirstChild("ClientEntities")
+            if not ce then return end
+            for _, model in ipairs(ce:GetChildren()) do
+                if model:IsA("Model") and not seen[model.Name]
+                    and not isBossName(model.Name)
+                    and model.Name:lower() ~= "kurama" then
+                    seen[model.Name] = true
+                    local hp = mobHp[model.Name]
+                    local label = model.Name
+                    if hp and hp.maxHp > 0 then
+                        label = model.Name .. " (HP: " .. tostring(hp.maxHp) .. ")"
+                    end
+                    table.insert(mobs, { name = model.Name, label = label })
+                end
+            end
+        end)
+        for _, ent in pairs(trackedEntities) do
+            if ent.name ~= "" and not seen[ent.name]
+                and not isBossName(ent.name)
+                and ent.name:lower() ~= "kurama"
+                and ent.health > 0 then
+                seen[ent.name] = true
+                local label = ent.name
+                if ent.maxHealth > 0 then
+                    label = ent.name .. " (HP: " .. tostring(ent.maxHealth) .. ")"
+                end
+                table.insert(mobs, { name = ent.name, label = label })
+            end
+        end
+        table.sort(mobs, function(a, b) return a.name < b.name end)
+        return mobs
+    end
+
+    local function findTargetMob()
+        local hrp = getHRP()
+        if not hrp then return nil, nil end
+        local bestId, bestEnt, bestDist = nil, nil, math.huge
+        for id, ent in pairs(trackedEntities) do
+            if ent.health > 0 and ent.name ~= "" and selectedMobs[ent.name] and ent.pos then
+                local pos = typeof(ent.pos) == "Vector3" and ent.pos
+                    or Vector3.new(ent.pos.X or 0, ent.pos.Y or 0, ent.pos.Z or 0)
+                local dist = (hrp.Position - pos).Magnitude
+                if dist < bestDist then
+                    bestId, bestEnt, bestDist = id, ent, dist
+                end
+            end
+        end
+        return bestId, bestEnt
+    end
+
+    task.spawn(function()
+        while true do
+            if not active then task.wait(1); continue end
+            if not ClientEvents then task.wait(1); continue end
+            if (_G.AutoBoss and _G.AutoBoss.isFighting and _G.AutoBoss.isFighting())
+                or (_G.AutoKurama and _G.AutoKurama.isFighting and _G.AutoKurama.isFighting()) then
+                statusText = "Paused (Boss/Kurama)"
+                currentTarget = "None"
+                lastMobId = nil
+                task.wait(1); continue
+            end
+            pcall(function()
+                nameUnnamedEntities()
+                local mobId, mob = findTargetMob()
+                if not mobId then
+                    if currentTarget ~= "None" then
+                        _combatTargetPart = nil
+                        killCount += 1
+                        currentTarget = "None"
+                        lastMobId = nil
+                    end
+                    statusText = "Scanning..."
+                    initialTeleported = {}
+                    return
+                end
+                local capturedId = mobId
+                if capturedId ~= lastMobId then
+                    lastMobId = capturedId
+                end
+                currentTarget = mob.name
+                pcall(function()
+                    local ce = workspace:FindFirstChild("ClientEntities")
+                    if not ce then return end
+                    for _, child in ipairs(ce:GetChildren()) do
+                        if child.Name == mob.name and child:IsA("Model") then
+                            local hum = child:FindFirstChildOfClass("Humanoid")
+                            if not hum or hum.Health > 0 then
+                                local part = child:FindFirstChild("HumanoidRootPart")
+                                    or child:FindFirstChild("RootPart")
+                                    or child.PrimaryPart
+                                    or child:FindFirstChildWhichIsA("BasePart")
+                                if part then
+                                    _combatTargetPart = part
+                                    _combatOffset = CFrame.new(0, 2, 2)
+                                end
+                            end
+                            break
+                        end
+                    end
+                end)
+                if type(mobId) == "number" then
+                    zapFire(ClientEvents.attemptHitMobs, {mobId}, {0})
+                end
+                startSkillSpam()
+                statusText = "Farming: " .. mob.name
+            end)
+            task.wait()
+        end
+    end)
+
+    _G.AutoMob = {
+        enable = function() active = true end,
+        disable = function() active = false; currentTarget = "None"; initialTeleported = {}; lastMobId = nil; _combatTargetPart = nil; stopSkillSpam() end,
+        toggle = function(v) if v == nil then v = not active end; if v then _G.AutoMob.enable() else _G.AutoMob.disable() end end,
+        isActive = function() return active end,
+        isFighting = function() return active and currentTarget ~= "None" end,
+        getStatus = function() return statusText end,
+        getKills = function() return killCount end,
+        getMobList = getMobList,
+        getSelected = function() return selectedMobs end,
+        setSelected = function(tbl) selectedMobs = tbl or {} end,
+        toggleMob = function(name)
+            if selectedMobs[name] then selectedMobs[name] = nil
+            else selectedMobs[name] = true end
+        end,
+    }
+end
+
+-- ─── Feature: Auto Kurama Farm ──────────────────────────────────────────────
+do
+    local active = false
+    local fighting = false
+    local statusText = "Idle"
+    local killCount = 0
+    local kuramaLookConn = nil
+    local kuramaClickThread = nil
+
+    local function findKuramaPart()
+        local ce = workspace:FindFirstChild("ClientEntities")
+        if not ce then return nil end
+        local model = ce:FindFirstChild("Kurama")
+        if not model then return nil end
+        local part = model:FindFirstChild("HumanoidRootPart")
+            or model:FindFirstChild("RootPart")
+            or model.PrimaryPart
+            or model:FindFirstChildWhichIsA("BasePart")
+        return part
+    end
+
+    local function startKuramaLook() end -- positioning handled in main loop
+
+    local function stopKuramaLook()
+        if kuramaLookConn then pcall(function() kuramaLookConn:Disconnect() end) kuramaLookConn = nil end
+    end
+
+    local function startKuramaClick()
+        if kuramaClickThread then pcall(task.cancel, kuramaClickThread) end
+        kuramaClickThread = task.spawn(function()
+            local Camera = workspace.CurrentCamera
+            local VIM = game:GetService("VirtualInputManager")
+            while active and fighting do
+                local kuramaPart = findKuramaPart()
+                if kuramaPart then
+                    pcall(function()
+                        local screenPos, onScreen = Camera:WorldToViewportPoint(kuramaPart.Position)
+                        if onScreen then
+                            VIM:SendMouseButtonEvent(screenPos.X, screenPos.Y, 0, true, game, 1)
+                            task.wait(0.05)
+                            VIM:SendMouseButtonEvent(screenPos.X, screenPos.Y, 0, false, game, 1)
+                        end
+                    end)
+                end
+                task.wait(0.15)
+            end
+        end)
+    end
+
+    local function stopKuramaClick()
+        if kuramaClickThread then pcall(task.cancel, kuramaClickThread) kuramaClickThread = nil end
+    end
+
+    local function findKuramaEntity()
+        for id, ent in pairs(trackedEntities) do
+            if ent.name:lower() == "kurama" and ent.health > 0 then
+                -- Verify model still exists in ClientEntities
+                local model = findEntityModel(id)
+                if model then return id, ent end
+                -- Stale entry — remove it
+                trackedEntities[id] = nil
+            end
+        end
+        return nil, nil
+    end
+
+    local function findTotem()
+        local ok, totem = pcall(function()
+            return workspace.Map.Arenas.Boss.KuramaArena.Totem
+        end)
+        return ok and totem or nil
+    end
+
+    local died = false
+    PL.CharacterAdded:Connect(function(char)
+        if not active then return end
+        local hum = char:WaitForChild("Humanoid", 10)
+        if hum then
+            hum.Died:Connect(function()
+                if active then
+                    died = true
+                    fighting = false
+                    stopBehind()
+                    statusText = "Died — waiting to respawn..."
+                end
+            end)
+        end
+    end)
+    -- Hook current character too
+    pcall(function()
+        local char = PL.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                hum.Died:Connect(function()
+                    if active then
+                        died = true
+                        fighting = false
+                        stopBehind()
+                        statusText = "Died — waiting to respawn..."
+                    end
+                end)
+            end
+        end
+    end)
+
+    task.spawn(function()
+        while true do
+            if not active then task.wait(1); continue end
+            if not ClientEvents then task.wait(1); continue end
+
+            -- After death, wait for respawn before resuming
+            if died then
+                stopKuramaLook()
+                stopKuramaClick()
+                _combatTargetPart = nil
+                stopSkillSpam()
+                fighting = false
+                while not getHRP() do task.wait(0.5) end
+                task.wait(2) -- let character fully load
+                died = false
+                pressKey(Enum.KeyCode.Four)
+                statusText = "Respawned — heading to totem..."
+            end
+
+            pcall(function()
+                nameUnnamedEntities()
+                local kId, kurama = findKuramaEntity()
+                if kId then
+                    if not fighting then
+                        fighting = true
+                        task.spawn(function()
+                            pressKey(Enum.KeyCode.Four)
+                            task.wait(0.1)
+                            pressKey(Enum.KeyCode.Four)
+                        end)
+                        startKuramaLook()
+                        startKuramaClick()
+                        startSkillSpam()
+                    end
+                    local kuramaPart = findKuramaPart()
+                    if kuramaPart then
+                        _combatTargetPart = kuramaPart
+                        _combatOffset = CFrame.new(0, 25, 40)
+                    end
+                    if type(kId) == "number" then
+                        zapFire(ClientEvents.attemptHitMobs, {kId}, {0})
+                    end
+                    local pct = kurama.maxHealth > 0 and math.floor(kurama.health / kurama.maxHealth * 100) or 0
+                    statusText = "Fighting Kurama (" .. pct .. "%)"
+                else
+                    stopKuramaLook()
+                    stopKuramaClick()
+                    _combatTargetPart = nil
+                    stopSkillSpam()
+                    if fighting then
+                        killCount += 1
+                        fighting = false
+                        statusText = "Kurama killed! (" .. killCount .. " total)"
+                    end
+                    local totem = findTotem()
+                    if totem then
+                        local totemPart = totem:IsA("BasePart") and totem
+                            or totem:FindFirstChildWhichIsA("BasePart", true)
+                        if totemPart then
+                            teleportTo(CFrame.new(totemPart.Position + Vector3.new(0, 3, 0)))
+                            task.wait(1.5)
+                            local prompt = nil
+                            pcall(function()
+                                local searchIn = totem:IsA("BasePart") and totem.Parent or totem
+                                for _, v in ipairs(searchIn:GetDescendants()) do
+                                    if v:IsA("ProximityPrompt") then prompt = v; break end
+                                end
+                            end)
+                            if prompt then
+                                pcall(function()
+                                    if fireproximityprompt then
+                                        fireproximityprompt(prompt)
+                                    else
+                                        local key = prompt.KeyboardKeyCode
+                                        if key == Enum.KeyCode.Unknown then key = Enum.KeyCode.E end
+                                        pressKey(key)
+                                    end
+                                end)
+                            else
+                                pressKey(Enum.KeyCode.E)
+                            end
+                            statusText = "Triggering totem..."
+                        end
+                    else
+                        statusText = "Totem not found"
+                    end
+                    local waited = 0
+                    while active and waited < 20 do
+                        local kid, _ = findKuramaEntity()
+                        if kid then break end
+                        task.wait(0.5); waited += 0.5
+                    end
+                end
+            end)
+            task.wait()
+        end
+    end)
+
+    _G.AutoKurama = {
+        enable = function() active = true end,
+        disable = function() active = false; fighting = false; stopKuramaLook(); stopKuramaClick(); _combatTargetPart = nil; stopSkillSpam() end,
+        toggle = function(v) if v == nil then v = not active end; if v then _G.AutoKurama.enable() else _G.AutoKurama.disable() end end,
+        isActive = function() return active end,
+        isFighting = function() return fighting end,
+        getStatus = function() return statusText end,
+        getKills = function() return killCount end,
     }
 end
 
@@ -879,6 +1373,8 @@ local TOGGLE_DEFS = {
     { label = "Auto Train",     key = "autoTrain",     getApi = function() return _G.AutoTrain end,     tip = "Server-side training + zone teleport" },
     { label = "Auto Boss",      key = "autoBoss",      getApi = function() return _G.AutoBoss end,      tip = "Farm World Bosses (excludes Kurama)" },
     { label = "Auto Adventure", key = "autoAdventure", getApi = function() return _G.AutoAdventure end, tip = "Loop champion adventures on all slots" },
+    { label = "Auto Mob",       key = "autoMob",       getApi = function() return _G.AutoMob end,       tip = "Farm selected mobs with tween-behind" },
+    { label = "Auto Kurama",    key = "autoKurama",    getApi = function() return _G.AutoKurama end,    tip = "Auto Kurama boss farm (totem trigger)" },
 }
 
 -- Restore toggle states
@@ -963,14 +1459,13 @@ else
 end
 
 -- ─── Bubble (Minimize) ───────────────────────────────────────────────────────
-local bubble = Instance.new("TextButton", g)
+local PFP_URL = "https://raw.githubusercontent.com/Devilish-Codes/Taos/main/pfp_bg7_p03_scarlet.png"
+local bubble = Instance.new("ImageButton", g)
 bubble.Size = UDim2.new(0, 44, 0, 44)
 bubble.Position = UDim2.new(1, -57, 0, 64)
 bubble.BackgroundColor3 = C_TITLE
-bubble.Text = "AFS"
-bubble.TextColor3 = C_TXT_ON
-bubble.TextSize = 11
-bubble.Font = Enum.Font.GothamBold
+bubble.Image = PFP_URL
+bubble.ScaleType = Enum.ScaleType.Crop
 bubble.BorderSizePixel = 0
 bubble.Visible = false
 Instance.new("UICorner", bubble).CornerRadius = UDim.new(0.5, 0)
@@ -1107,7 +1602,7 @@ UIS.InputEnded:Connect(function(input)
 end)
 
 -- ─── Tab Bar ─────────────────────────────────────────────────────────────────
-local TAB_NAMES = {"Controls", "Combat"}
+local TAB_NAMES = {"Controls", "Combat", "Mobs"}
 local TAB_COUNT = #TAB_NAMES
 local TAB_W = math.floor(W / TAB_COUNT)
 local tabBar = Instance.new("Frame", panel)
@@ -1142,7 +1637,7 @@ mkGrad(tabDiv, C_DIV, Color3.fromRGB(150, 20, 55), 0)
 
 -- ─── Content Frames ──────────────────────────────────────────────────────────
 local contentFrames = {}
-local PANEL_HEIGHTS = {310, 130}
+local PANEL_HEIGHTS = {310, 190, 240}
 for i, _ in ipairs(TAB_NAMES) do
     local f = Instance.new("Frame", panel)
     f.Position = UDim2.new(0, 0, 0, 61)
@@ -1343,10 +1838,60 @@ local function makeDropdown(parent, labelText, yPos, options, onSelect)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════════
--- TAB 1: CONTROLS (Adventure + Train + Anti-AFK)
+-- TAB 1: CONTROLS (Train + Adventure + Anti-AFK)
 -- ═══════════════════════════════════════════════════════════════════════════════
 local controlsFrame = contentFrames[1]
 local ty = 6
+
+-- Auto Train Toggle
+makeToggleBtn(controlsFrame, TOGGLE_DEFS[1], 6, W - 16, ty)
+ty = ty + 32
+
+-- Stat Dropdown
+local statOpts = {{ value = "All", display = "All (Cycle)" }}
+for _, s in ipairs(STAT_TYPES) do
+    table.insert(statOpts, { value = s, display = s })
+end
+local statDropdown = makeDropdown(controlsFrame, "Training Stat", ty, statOpts, function(val)
+    pcall(function() _G.AutoTrain.setStat(val) end)
+end)
+statDropdown.btn.Text = savedState.trainStat or "All (Cycle)"
+if savedState.trainStat then
+    pcall(function() _G.AutoTrain.setStat(savedState.trainStat == "All (Cycle)" and "All" or savedState.trainStat) end)
+end
+ty = ty + 40
+
+-- Train status
+local trainStatusLbl = Instance.new("TextLabel", controlsFrame)
+trainStatusLbl.Size = UDim2.new(1, -12, 0, 14)
+trainStatusLbl.Position = UDim2.new(0, 6, 0, ty)
+trainStatusLbl.BackgroundTransparency = 1
+trainStatusLbl.TextColor3 = Color3.fromRGB(200, 180, 230)
+trainStatusLbl.Text = "Status: Idle"
+trainStatusLbl.TextSize = 10
+trainStatusLbl.Font = Enum.Font.Gotham
+trainStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+ty = ty + 16
+
+-- Stat readouts (compact 3-col)
+local statLabels = {}
+for i, name in ipairs(STAT_TYPES) do
+    local row = math.ceil(i / 3)
+    local col = (i - 1) % 3
+    local lbl = Instance.new("TextLabel", controlsFrame)
+    lbl.Size = UDim2.new(0, 95, 0, 13)
+    lbl.Position = UDim2.new(0, 6 + col * 100, 0, ty + (row - 1) * 14)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Color3.fromRGB(180, 150, 220)
+    lbl.Text = name .. ": ?"
+    lbl.TextSize = 9
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    statLabels[name] = lbl
+end
+ty = ty + math.ceil(#STAT_TYPES / 3) * 14 + 4
+
+hLine(controlsFrame, ty); ty = ty + 6
 
 -- Auto Adventure Toggle
 makeToggleBtn(controlsFrame, TOGGLE_DEFS[3], 6, W - 16, ty)
@@ -1380,7 +1925,6 @@ champBtn.TextSize = 11
 champBtn.Font = Enum.Font.GothamBold
 champBtn.BorderSizePixel = 0
 champBtn.ZIndex = 5
-champBtn.Active = true
 Instance.new("UICorner", champBtn).CornerRadius = UDim.new(0, 5)
 mkStroke(champBtn, C_DIV, 1, 0.3)
 
@@ -1476,32 +2020,6 @@ local function saveChampSelection()
     saveState(state)
 end
 
--- refreshChampList must be defined before click handlers that reference it
-local function refreshChampList()
-    pcall(function()
-        local champs = _G.AutoAdventure.getChampions()
-        if #champs == 0 then return end
-        for i = 1, MAX_CHAMP_BTNS do
-            if i <= #champs then
-                champOptData[i] = champs[i]
-                champOptBtns[i].Text = "  [  ] " .. champs[i].name
-                champOptBtns[i].Position = UDim2.new(0, 2, 0, 2 + (i - 1) * 24)
-                champOptBtns[i].Visible = true
-            else
-                champOptData[i] = nil
-                champOptBtns[i].Visible = false
-            end
-        end
-        local count = math.min(#champs, MAX_CHAMP_BTNS)
-        local ch = 2 + count * 24 + 2
-        champList.CanvasSize = UDim2.new(0, 0, 0, ch)
-        local maxVisible = UIS.TouchEnabled and (4 * 24 + 4) or 160
-        champList.Size = UDim2.new(1, 0, 0, math.min(ch, maxVisible))
-        updateCheckmarks()
-        updateChampBtnText()
-    end)
-end
-
 -- Wire up click handlers
 for i = 1, MAX_CHAMP_BTNS do
     champOptBtns[i].MouseButton1Click:Connect(function()
@@ -1523,18 +2041,44 @@ local function closeChampList()
     if activeDropdown == champList then activeDropdown = nil end
 end
 champBtn.MouseButton1Click:Connect(function()
-    if champListOpen then
-        closeChampList()
-        return
-    end
-    if activeDropdown and activeDropdown ~= champList then
-        activeDropdown.Visible = false
-    end
-    champList.Visible = true
-    champListOpen = true
-    activeDropdown = champList
-    updateCheckmarks()
+    pcall(function()
+        if champListOpen then
+            closeChampList()
+        else
+            if activeDropdown and activeDropdown ~= champList then
+                activeDropdown.Visible = false
+            end
+            champList.Visible = true
+            champListOpen = true
+            activeDropdown = champList
+            updateCheckmarks()
+        end
+    end)
 end)
+
+local function refreshChampList()
+    pcall(function()
+        local champs = _G.AutoAdventure.getChampions()
+        if #champs == 0 then return end
+        for i = 1, MAX_CHAMP_BTNS do
+            if i <= #champs then
+                champOptData[i] = champs[i]
+                champOptBtns[i].Text = "  [  ] " .. champs[i].name
+                champOptBtns[i].Position = UDim2.new(0, 2, 0, 2 + (i - 1) * 24)
+                champOptBtns[i].Visible = true
+            else
+                champOptData[i] = nil
+                champOptBtns[i].Visible = false
+            end
+        end
+        local count = math.min(#champs, MAX_CHAMP_BTNS)
+        local ch = 2 + count * 24 + 2
+        champList.CanvasSize = UDim2.new(0, 0, 0, ch)
+        champList.Size = UDim2.new(1, 0, 0, math.min(ch, 160))
+        updateCheckmarks()
+        updateChampBtnText()
+    end)
+end
 
 champRefreshBtn.MouseButton1Click:Connect(function()
     champRefreshBtn.Text = "..."
@@ -1578,56 +2122,6 @@ ty = ty + 18
 
 hLine(controlsFrame, ty); ty = ty + 6
 
--- Auto Train Toggle
-makeToggleBtn(controlsFrame, TOGGLE_DEFS[1], 6, W - 16, ty)
-ty = ty + 32
-
--- Stat Dropdown
-local statOpts = {{ value = "All", display = "All (Cycle)" }}
-for _, s in ipairs(STAT_TYPES) do
-    table.insert(statOpts, { value = s, display = s })
-end
-local statDropdown = makeDropdown(controlsFrame, "Training Stat", ty, statOpts, function(val)
-    pcall(function() _G.AutoTrain.setStat(val) end)
-end)
-statDropdown.btn.Text = savedState.trainStat or "All (Cycle)"
-if savedState.trainStat then
-    pcall(function() _G.AutoTrain.setStat(savedState.trainStat == "All (Cycle)" and "All" or savedState.trainStat) end)
-end
-ty = ty + 40
-
--- Train status
-local trainStatusLbl = Instance.new("TextLabel", controlsFrame)
-trainStatusLbl.Size = UDim2.new(1, -12, 0, 14)
-trainStatusLbl.Position = UDim2.new(0, 6, 0, ty)
-trainStatusLbl.BackgroundTransparency = 1
-trainStatusLbl.TextColor3 = Color3.fromRGB(200, 180, 230)
-trainStatusLbl.Text = "Status: Idle"
-trainStatusLbl.TextSize = 10
-trainStatusLbl.Font = Enum.Font.Gotham
-trainStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-ty = ty + 16
-
--- Stat readouts (compact 3-col)
-local statLabels = {}
-for i, name in ipairs(STAT_TYPES) do
-    local row = math.ceil(i / 3)
-    local col = (i - 1) % 3
-    local lbl = Instance.new("TextLabel", controlsFrame)
-    lbl.Size = UDim2.new(0, 95, 0, 13)
-    lbl.Position = UDim2.new(0, 6 + col * 100, 0, ty + (row - 1) * 14)
-    lbl.BackgroundTransparency = 1
-    lbl.TextColor3 = Color3.fromRGB(180, 150, 220)
-    lbl.Text = name .. ": ?"
-    lbl.TextSize = 9
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    statLabels[name] = lbl
-end
-ty = ty + math.ceil(#STAT_TYPES / 3) * 14 + 4
-
-hLine(controlsFrame, ty); ty = ty + 6
-
 -- Anti-AFK badge
 local afkLbl = Instance.new("TextLabel", controlsFrame)
 afkLbl.Size = UDim2.new(1, -12, 0, 14)
@@ -1661,7 +2155,7 @@ bossStatusLbl.Font = Enum.Font.Gotham
 bossStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 cy = cy + 16
 
--- Kill count
+-- Boss kill count
 local killCountLbl = Instance.new("TextLabel", combatFrame)
 killCountLbl.Size = UDim2.new(1, -12, 0, 14)
 killCountLbl.Position = UDim2.new(0, 6, 0, cy)
@@ -1671,6 +2165,274 @@ killCountLbl.Text = "Kills: 0"
 killCountLbl.TextSize = 10
 killCountLbl.Font = Enum.Font.Gotham
 killCountLbl.TextXAlignment = Enum.TextXAlignment.Left
+cy = cy + 18
+
+hLine(combatFrame, cy); cy = cy + 6
+
+-- Auto Kurama Toggle
+makeToggleBtn(combatFrame, TOGGLE_DEFS[5], 6, W - 16, cy)
+cy = cy + 32
+
+-- Kurama status
+local kuramaStatusLbl = Instance.new("TextLabel", combatFrame)
+kuramaStatusLbl.Size = UDim2.new(1, -12, 0, 14)
+kuramaStatusLbl.Position = UDim2.new(0, 6, 0, cy)
+kuramaStatusLbl.BackgroundTransparency = 1
+kuramaStatusLbl.TextColor3 = Color3.fromRGB(200, 180, 230)
+kuramaStatusLbl.Text = "Kurama: Idle"
+kuramaStatusLbl.TextSize = 10
+kuramaStatusLbl.Font = Enum.Font.Gotham
+kuramaStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+cy = cy + 16
+
+-- Kurama kill count
+local kuramaKillLbl = Instance.new("TextLabel", combatFrame)
+kuramaKillLbl.Size = UDim2.new(1, -12, 0, 14)
+kuramaKillLbl.Position = UDim2.new(0, 6, 0, cy)
+kuramaKillLbl.BackgroundTransparency = 1
+kuramaKillLbl.TextColor3 = Color3.fromRGB(200, 180, 230)
+kuramaKillLbl.Text = "Kurama Kills: 0"
+kuramaKillLbl.TextSize = 10
+kuramaKillLbl.Font = Enum.Font.Gotham
+kuramaKillLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- TAB 3: MOBS
+-- ═══════════════════════════════════════════════════════════════════════════════
+local mobsFrame = contentFrames[3]
+local my = 6
+
+-- Auto Mob Toggle
+makeToggleBtn(mobsFrame, TOGGLE_DEFS[4], 6, W - 16, my)
+my = my + 32
+
+-- Mob status
+local mobStatusLbl = Instance.new("TextLabel", mobsFrame)
+mobStatusLbl.Size = UDim2.new(1, -12, 0, 14)
+mobStatusLbl.Position = UDim2.new(0, 6, 0, my)
+mobStatusLbl.BackgroundTransparency = 1
+mobStatusLbl.TextColor3 = Color3.fromRGB(200, 180, 230)
+mobStatusLbl.Text = "Mob Farm: Idle"
+mobStatusLbl.TextSize = 10
+mobStatusLbl.Font = Enum.Font.Gotham
+mobStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+my = my + 16
+
+-- Mob kill count
+local mobKillLbl = Instance.new("TextLabel", mobsFrame)
+mobKillLbl.Size = UDim2.new(1, -12, 0, 14)
+mobKillLbl.Position = UDim2.new(0, 6, 0, my)
+mobKillLbl.BackgroundTransparency = 1
+mobKillLbl.TextColor3 = Color3.fromRGB(200, 180, 230)
+mobKillLbl.Text = "Mob Kills: 0"
+mobKillLbl.TextSize = 10
+mobKillLbl.Font = Enum.Font.Gotham
+mobKillLbl.TextXAlignment = Enum.TextXAlignment.Left
+my = my + 18
+
+hLine(mobsFrame, my); my = my + 6
+
+-- Mob multi-select checklist
+local mobContainer = Instance.new("Frame", mobsFrame)
+mobContainer.Size = UDim2.new(1, -12, 0, 42)
+mobContainer.Position = UDim2.new(0, 6, 0, my)
+mobContainer.BackgroundTransparency = 1
+mobContainer.BorderSizePixel = 0
+mobContainer.ZIndex = 5
+
+local mobLbl = Instance.new("TextLabel", mobContainer)
+mobLbl.Size = UDim2.new(0, 100, 0, 14)
+mobLbl.BackgroundTransparency = 1
+mobLbl.TextColor3 = Color3.fromRGB(190, 150, 255)
+mobLbl.Text = "Select Mobs"
+mobLbl.TextSize = 10
+mobLbl.Font = Enum.Font.GothamBold
+mobLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local mobBtn = Instance.new("TextButton", mobContainer)
+mobBtn.Size = UDim2.new(1, -56, 0, 24)
+mobBtn.Position = UDim2.new(0, 0, 0, 16)
+mobBtn.BackgroundColor3 = Color3.fromRGB(28, 10, 50)
+mobBtn.TextColor3 = Color3.fromRGB(200, 180, 230)
+mobBtn.Text = "None selected"
+mobBtn.TextSize = 11
+mobBtn.Font = Enum.Font.GothamBold
+mobBtn.BorderSizePixel = 0
+mobBtn.ZIndex = 5
+Instance.new("UICorner", mobBtn).CornerRadius = UDim.new(0, 5)
+mkStroke(mobBtn, C_DIV, 1, 0.3)
+
+local mobRefreshBtn = Instance.new("TextButton", mobContainer)
+mobRefreshBtn.Size = UDim2.new(0, 50, 0, 24)
+mobRefreshBtn.Position = UDim2.new(1, -50, 0, 16)
+mobRefreshBtn.BackgroundColor3 = Color3.fromRGB(28, 10, 50)
+mobRefreshBtn.TextColor3 = Color3.fromRGB(190, 150, 255)
+mobRefreshBtn.Text = "Refresh"
+mobRefreshBtn.TextSize = 9
+mobRefreshBtn.Font = Enum.Font.GothamBold
+mobRefreshBtn.BorderSizePixel = 0
+mobRefreshBtn.ZIndex = 5
+Instance.new("UICorner", mobRefreshBtn).CornerRadius = UDim.new(0, 4)
+mkStroke(mobRefreshBtn, C_DIV, 1, 0.4)
+
+local mobList = Instance.new("ScrollingFrame", mobContainer)
+mobList.Size = UDim2.new(1, 0, 0, 0)
+mobList.Position = UDim2.new(0, 0, 0, 42)
+mobList.BackgroundColor3 = Color3.fromRGB(18, 6, 34)
+mobList.BorderSizePixel = 0
+mobList.Visible = false
+mobList.ScrollBarThickness = 3
+mobList.ScrollBarImageColor3 = Color3.fromRGB(90, 28, 140)
+mobList.ZIndex = 15
+Instance.new("UICorner", mobList).CornerRadius = UDim.new(0, 5)
+mkStroke(mobList, C_DIV, 1, 0.3)
+
+local MAX_MOB_BTNS = 20
+local mobOptBtns = {}
+local mobOptData = {}
+local mobOptLabels = {}
+for i = 1, MAX_MOB_BTNS do
+    local ob = Instance.new("TextButton", mobList)
+    ob.Size = UDim2.new(1, -4, 0, 22)
+    ob.Position = UDim2.new(0, 2, 0, 2 + (i - 1) * 24)
+    ob.BackgroundColor3 = Color3.fromRGB(28, 10, 50)
+    ob.TextColor3 = Color3.fromRGB(220, 200, 255)
+    ob.Text = ""
+    ob.TextSize = 10
+    ob.Font = Enum.Font.GothamBold
+    ob.TextXAlignment = Enum.TextXAlignment.Left
+    ob.BorderSizePixel = 0
+    ob.ZIndex = 16
+    ob.Visible = false
+    Instance.new("UICorner", ob).CornerRadius = UDim.new(0, 4)
+    ob.MouseEnter:Connect(function() pcall(function() ob.BackgroundColor3 = C_BTN_ON end) end)
+    ob.MouseLeave:Connect(function() pcall(function() ob.BackgroundColor3 = Color3.fromRGB(28, 10, 50) end) end)
+    mobOptBtns[i] = ob
+end
+
+local function getMobSelectedSet()
+    return _G.AutoMob and _G.AutoMob.getSelected() or {}
+end
+
+local function updateMobBtnText()
+    local sel = getMobSelectedSet()
+    if not next(sel) then
+        mobBtn.Text = "None selected"
+        return
+    end
+    local names = {}
+    for name in pairs(sel) do table.insert(names, name) end
+    table.sort(names)
+    if #names <= 2 then mobBtn.Text = table.concat(names, ", ")
+    else mobBtn.Text = names[1] .. " +" .. (#names - 1) .. " more"
+    end
+end
+
+local function updateMobCheckmarks()
+    local sel = getMobSelectedSet()
+    for i = 1, MAX_MOB_BTNS do
+        local d = mobOptData[i]
+        if not d then break end
+        local checked = sel[d]
+        local prefix = checked and "[x] " or "[  ] "
+        local label = mobOptLabels[i] or d
+        mobOptBtns[i].Text = "  " .. prefix .. label
+        mobOptBtns[i].TextColor3 = checked and C_BTXT_ON or Color3.fromRGB(160, 130, 190)
+    end
+end
+
+for i = 1, MAX_MOB_BTNS do
+    mobOptBtns[i].MouseButton1Click:Connect(function()
+        local d = mobOptData[i]
+        if not d then return end
+        pcall(function()
+            _G.AutoMob.toggleMob(d)
+            updateMobCheckmarks()
+            updateMobBtnText()
+            local state = loadState()
+            local sel = getMobSelectedSet()
+            local list = {}
+            for name in pairs(sel) do table.insert(list, name) end
+            state.mobSelection = #list > 0 and list or nil
+            saveState(state)
+        end)
+    end)
+end
+
+local mobListOpen = false
+local function closeMobList()
+    mobList.Visible = false
+    mobListOpen = false
+    if activeDropdown == mobList then activeDropdown = nil end
+end
+mobBtn.MouseButton1Click:Connect(function()
+    pcall(function()
+        if mobListOpen then
+            closeMobList()
+        else
+            if activeDropdown and activeDropdown ~= mobList then
+                activeDropdown.Visible = false
+            end
+            mobList.Visible = true
+            mobListOpen = true
+            activeDropdown = mobList
+            updateMobCheckmarks()
+        end
+    end)
+end)
+
+local function refreshMobList()
+    pcall(function()
+        local mobs = _G.AutoMob.getMobList()
+        if #mobs == 0 then return end
+        for i = 1, MAX_MOB_BTNS do
+            if i <= #mobs then
+                local m = mobs[i]
+                mobOptData[i] = type(m) == "table" and m.name or m
+                mobOptLabels[i] = type(m) == "table" and m.label or m
+                mobOptBtns[i].Text = "  [  ] " .. mobOptLabels[i]
+                mobOptBtns[i].Position = UDim2.new(0, 2, 0, 2 + (i - 1) * 24)
+                mobOptBtns[i].Visible = true
+            else
+                mobOptData[i] = nil
+                mobOptBtns[i].Visible = false
+            end
+        end
+        local count = math.min(#mobs, MAX_MOB_BTNS)
+        local ch = 2 + count * 24 + 2
+        mobList.CanvasSize = UDim2.new(0, 0, 0, ch)
+        mobList.Size = UDim2.new(1, 0, 0, math.min(ch, 180))
+        updateMobCheckmarks()
+        updateMobBtnText()
+    end)
+end
+
+mobRefreshBtn.MouseButton1Click:Connect(function()
+    mobRefreshBtn.Text = "..."
+    task.spawn(function()
+        refreshMobList()
+        mobRefreshBtn.Text = "Refresh"
+    end)
+end)
+
+-- Restore saved mob selection
+pcall(function()
+    if savedState.mobSelection and type(savedState.mobSelection) == "table" then
+        local sel = {}
+        for _, name in ipairs(savedState.mobSelection) do sel[name] = true end
+        _G.AutoMob.setSelected(sel)
+    end
+end)
+
+-- Auto-populate mob list on startup
+task.spawn(function()
+    for attempt = 1, 10 do
+        task.wait(5)
+        refreshMobList()
+        local mobs = _G.AutoMob.getMobList()
+        if #mobs > 0 then break end
+    end
+end)
 
 -- ─── Periodic Refresh Loop ───────────────────────────────────────────────────
 task.spawn(function()
@@ -1684,7 +2446,15 @@ task.spawn(function()
 
             -- Boss status
             bossStatusLbl.Text = "Boss: " .. _G.AutoBoss.getStatus()
-            killCountLbl.Text = "Kills: " .. _G.AutoBoss.getKills()
+            killCountLbl.Text = "Boss Kills: " .. _G.AutoBoss.getKills()
+
+            -- Kurama status
+            kuramaStatusLbl.Text = "Kurama: " .. _G.AutoKurama.getStatus()
+            kuramaKillLbl.Text = "Kurama Kills: " .. _G.AutoKurama.getKills()
+
+            -- Mob status
+            mobStatusLbl.Text = "Mob Farm: " .. _G.AutoMob.getStatus()
+            mobKillLbl.Text = "Mob Kills: " .. _G.AutoMob.getKills()
 
             -- Adventure status
             advStatusLbl.Text = "Adventure: " .. _G.AutoAdventure.getStatus()
